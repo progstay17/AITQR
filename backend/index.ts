@@ -533,6 +533,10 @@ export default {
         if (req.method === "POST") {
           const masterKey = env.AITQR_VAULT_MASTER_KEY?.trim() ?? "";
           if (!/^[0-9a-fA-F]{64}$/.test(masterKey)) return fail("Key Vault belum dikonfigurasi. Atur AITQR_VAULT_MASTER_KEY di environment server.", 503);
+          const appUrl = new URL(env.APP_ORIGIN);
+          if (appUrl.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(appUrl.hostname)) {
+            return fail("Registrasi private key wajib menggunakan HTTPS.", 503);
+          }
           const body = (await req.json().catch(() => null)) as { accountId?: string; privateKeyHex?: string } | null;
           const accountId = String(body?.accountId ?? "");
           const privateKeyHex = String(body?.privateKeyHex ?? "").replace(/\s+/g, "");
