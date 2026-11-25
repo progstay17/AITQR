@@ -43,7 +43,7 @@ test("admin save and publish use operation locks", () => {
 
 test("staff login reuses the authenticated user instead of requesting session twice", () => {
   assert.ok(app.includes("async function boot(initialSession?: Session)"));
-  assert.ok(app.includes('api<{ user: SessionUser }>("/api/login"')));
+  assert.ok(app.includes('api<{ user: SessionUser }>("/api/login"'));
   assert.ok(app.includes("boot({ signedIn: true, user: result.user })"));
 });
 
