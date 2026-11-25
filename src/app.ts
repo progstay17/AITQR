@@ -134,16 +134,19 @@ function plainTextError(response: Response, text: string): string {
 
 // ---------------------------------------------------------------- boot
 
-async function boot(): Promise<void> {
+async function boot(initialSession?: Session): Promise<void> {
   state.view = { name: "boot" };
   state.notice = null;
   state.configError = null;
   render();
 
-  const session = await api<Session>("/api/session").catch((error: unknown) => {
-    state.sessionError = error instanceof Error ? error.message : String(error);
-    return null;
-  });
+  let session = initialSession ?? null;
+  if (!session) {
+    session = await api<Session>("/api/session").catch((error: unknown) => {
+      state.sessionError = error instanceof Error ? error.message : String(error);
+      return null;
+    });
+  }
   if (!session) {
     state.session = null;
     state.view = { name: "session-unavailable" };
@@ -293,13 +296,14 @@ function renderLogin(): HTMLElement {
         state.busy = "login";
         state.loginError = null;
         render();
-        void api("/api/login", {
+        void api<{ user: SessionUser }>("/api/login", {
           method: "POST",
           body: JSON.stringify({ username: username.value, password: password.value }),
         })
-          .then(() => {
+          .then((result) => {
             state.busy = "";
-            return boot();
+            // Login already returned the authenticated user; avoid a redundant /api/session round-trip.
+            return boot({ signedIn: true, user: result.user });
           })
           .catch((error: unknown) => {
             state.busy = "";
