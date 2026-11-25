@@ -1,4 +1,4 @@
-// Build: compile TypeScript to dist/app, copy the shell and the vendored encoder, stamp the worker.
+// Build: compile the PWA and bundle the Node.js API, copy static assets and stamp the service worker.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -49,13 +49,12 @@ const build = hash.digest("hex").slice(0, 12);
 cpSync(join(root, "sw.js"), join(dist, "sw.js"));
 writeFileSync(join(dist, "sw.js"), readFileSync(join(dist, "sw.js"), "utf8").replace("__BUILD__", build));
 
-// 6. No `_headers` file: the Worker owns the response headers, so the policy can allow the
-//    sign-out form (`form-action 'self'`) and the admin session cookie flow.
+// 6. Response security headers are attached by the Node.js application server.
 
 if (!existsSync(join(dist, "app/main.js"))) throw new Error("build did not produce dist/app/main.js");
 
-// 7. Worker bundle. It lives outside dist/ so the Worker source is never served as an asset.
-//    The plugin lets Worker imports use the same ".js" specifiers as the browser code.
+// 7. Node.js API bundle. It lives outside dist/ so backend source is never served as an asset.
+//    The resolver lets backend imports use the same ".js" specifiers as the browser code.
 const jsToTs = {
   name: "js-to-ts",
   setup(build) {
@@ -69,16 +68,18 @@ const jsToTs = {
   },
 };
 
+mkdirSync(join(root, "server"), { recursive: true });
+
 await esbuild.build({
-  entryPoints: [join(root, "worker/index.ts")],
-  outfile: join(root, "server/worker.js"),
+  entryPoints: [join(root, "backend/index.ts")],
+  outfile: join(root, "server/app.js"),
   bundle: true,
   format: "esm",
-  platform: "neutral",
+  platform: "node",
   target: "es2022",
   loader: { ".json": "json" },
   plugins: [jsToTs],
   logLevel: "warning",
 });
 
-console.log(`built dist/ (build ${build}) and server/worker.js`);
+console.log(`built dist/ (build ${build}) and server/app.js`);

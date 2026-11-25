@@ -1,0 +1,27 @@
+[Unit]
+Description=AITQR self-hosted application
+After=network.target
+
+[Service]
+Type=simple
+User=aitqr
+Group=aitqr
+WorkingDirectory=/opt/aitqr
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+Environment=AITQR_DATA_DIR=/var/lib/aitqr
+EnvironmentFile=/etc/aitqr/aitqr.env
+ExecStart=/usr/bin/node /opt/aitqr/scripts/serve.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aitqr
+
+[Install]
+WantedBy=multi-user.target

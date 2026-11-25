@@ -5,7 +5,7 @@ import type { Bundle, SignedBundle } from "../types.js";
 /**
  * Sign a configuration bundle with the admin Ed25519 key.
  *
- * Used by the Worker (key from a Site secret) and by the offline CLI (key file), so both paths
+ * Used by the Node.js API server (protected environment variable) and by the offline CLI (key file), so both paths
  * produce exactly the same bytes. The private key is never returned, logged or embedded.
  */
 export async function signBundle(bundle: Bundle, seedHex: string): Promise<SignedBundle> {

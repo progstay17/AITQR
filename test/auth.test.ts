@@ -20,7 +20,7 @@ const now = 1_790_000_000_000;
 
 test("passwords are stored as salted PBKDF2 hashes, never as plaintext", async () => {
   const stored = await hashPassword("rahasia123");
-  assert.match(stored, /^pbkdf2\$12000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
+  assert.match(stored, /^pbkdf2\$120000\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
   assert.equal(stored.includes("rahasia123"), false);
   assert.equal(await verifyPassword("rahasia123", stored), true);
   assert.equal(await verifyPassword("rahasia124", stored), false);
@@ -35,7 +35,7 @@ test("two hashes of the same password differ (random salt) and both verify", asy
 });
 
 test("malformed or tampered stored hashes are rejected instead of throwing", async () => {
-  for (const stored of ["", "plain", "pbkdf2$120000$abcd", "pbkdf2$0$00$00", "md5$1$00$00"]) {
+  for (const stored of ["", "plain", "pbkdf2$12000$abcd", "pbkdf2$0$00$00", "md5$1$00$00"]) {
     assert.equal(await verifyPassword("rahasia123", stored), false);
   }
   const stored = await hashPassword("rahasia123");
@@ -43,12 +43,12 @@ test("malformed or tampered stored hashes are rejected instead of throwing", asy
   assert.equal(await verifyPassword("rahasia123", tampered), false);
 });
 
-test("the password cost is configurable and stays inside a CPU-safe range", async () => {
-  assert.equal(pbkdf2Iterations(undefined), 12_000);
-  assert.equal(pbkdf2Iterations(""), 12_000);
-  assert.equal(pbkdf2Iterations("bukan-angka"), 12_000);
-  assert.equal(pbkdf2Iterations("10"), 12_000);
-  assert.equal(pbkdf2Iterations("99999999"), 12_000);
+test("the VPS password cost is configurable and stays inside the supported range", async () => {
+  assert.equal(pbkdf2Iterations(undefined), 120_000);
+  assert.equal(pbkdf2Iterations(""), 120_000);
+  assert.equal(pbkdf2Iterations("bukan-angka"), 120_000);
+  assert.equal(pbkdf2Iterations("10"), 120_000);
+  assert.equal(pbkdf2Iterations("99999999"), 120_000);
   assert.equal(pbkdf2Iterations(" 60000 "), 60_000);
   assert.equal(storedIterations("pbkdf2$60000$00$00"), 60_000);
   assert.equal(storedIterations("plain"), null);
@@ -59,8 +59,8 @@ test("the password cost is configurable and stays inside a CPU-safe range", asyn
 });
 
 test("hashes written with an older cost still verify", async () => {
-  const legacy = await hashPassword("rahasia123", 120_000);
-  assert.match(legacy, /^pbkdf2\$120000\$/);
+  const legacy = await hashPassword("rahasia123", 12_000);
+  assert.match(legacy, /^pbkdf2\$12000\$/);
   assert.equal(await verifyPassword("rahasia123", legacy), true);
   assert.equal(await verifyPassword("rahasia124", legacy), false);
 });

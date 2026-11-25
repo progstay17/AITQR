@@ -1,5 +1,6 @@
 /**
- * AITQR backend on Cloudflare Workers (Freebuff Sites).
+ * AITQR HTTP application handler. It uses the Fetch API request/response model and is hosted by the
+ * Node.js server in scripts/serve.mjs, with persistent SQLite storage.
  *
  * Accounts are created by an administrator: username, password and the account's **public** signing key.
  * AITQR never generates account keys and never holds a private key; the staff member imports their own
@@ -28,26 +29,26 @@ import {
 import defaultSigned from "../bundles/default.bundle.json";
 import type { Bundle, SignedBundle } from "../src/types.js";
 
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
+interface SqlitePreparedStatement {
+  bind(...values: unknown[]): SqlitePreparedStatement;
   first<T = Record<string, unknown>>(column?: string): Promise<T | null>;
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
   run(): Promise<{ success: boolean; meta: { last_row_id?: number; changes?: number } }>;
 }
 
-interface D1Database {
-  prepare(sql: string): D1PreparedStatement;
+interface SqliteDatabase {
+  prepare(sql: string): SqlitePreparedStatement;
 }
 
 export interface Env {
   ASSETS: { fetch(request: Request): Promise<Response> };
-  DB: D1Database;
+  DB: SqliteDatabase;
   APP_ORIGIN: string;
-  /** Ed25519 seed that signs configuration bundles. Site secret. */
+  /** Ed25519 seed that signs configuration bundles. Protected server environment variable. */
   AITQR_ADMIN_KEY?: string;
-  /** HMAC secret for login session cookies. Site secret. */
+  /** HMAC secret for login session cookies. Protected server environment variable. */
   AITQR_SESSION_KEY?: string;
-  /** One-time code required to create the first administrator. Site secret. */
+  /** One-time code required to create the first administrator. Protected server environment variable. */
   AITQR_SETUP_CODE?: string;
   /** Optional PBKDF2-SHA256 rounds; raise it where hosting allows more CPU. */
   AITQR_PBKDF2_ITERATIONS?: string;
@@ -241,10 +242,7 @@ function fail(message: string, status = 400): Response {
   return json({ error: message }, { status });
 }
 
-/**
- * CSRF guard: the Origin must be this same site. Compared against the request's own Host so it also
- * works behind the preview proxy, where the public host differs from the Worker's internal URL.
- */
+/** CSRF guard: mutating requests must originate from the configured application origin. */
 function isSameOrigin(req: Request, env: Env): boolean {
   const origin = req.headers.get("Origin");
   if (!origin) {
@@ -261,11 +259,7 @@ function isSameOrigin(req: Request, env: Env): boolean {
   }
 }
 
-function securityHeaders(env: Env): Record<string, string> {
-  const preview = new URL(env.APP_ORIGIN).hostname.includes("-preview.");
-  const ancestors = preview
-    ? "'self' https://*.freebuff.com https://*.freebuff.site https://*.style.dev"
-    : "'none'";
+function securityHeaders(_env: Env): Record<string, string> {
   return {
     "Content-Security-Policy": [
       "default-src 'self'",
@@ -276,7 +270,7 @@ function securityHeaders(env: Env): Record<string, string> {
       "object-src 'none'",
       "base-uri 'none'",
       "form-action 'self'",
-      `frame-ancestors ${ancestors}`,
+      "frame-ancestors 'none'",
     ].join("; "),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",

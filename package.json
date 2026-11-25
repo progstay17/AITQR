@@ -3,12 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "AITQR \u2014 profile-driven MQ2 QR issuer for field staff: admin-managed accounts and metadata fields, QR signed on the device with the account's own Ed25519 key.",
+  "description": "AITQR — profile-driven MQ2 QR issuer for field staff with a self-hosted Node.js API and SQLite database.",
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.backend.json",
+    "pretest": "npm run build",
     "test": "node --test test/*.test.ts",
     "build": "node scripts/build.mjs",
     "start": "node scripts/serve.mjs",
+    "dev": "npm run build && node scripts/serve.mjs",
     "bundle:sign": "node tools/sign-bundle.ts",
     "bundle:lint": "node tools/lint-profile.ts",
     "bundle:budget": "node tools/budget.ts",
@@ -17,8 +19,7 @@
   },
   "devDependencies": {
     "esbuild": "0.28.2",
-    "typescript": "5.9.3",
-    "wrangler": "4.168.0"
+    "typescript": "5.9.3"
   },
   "engines": {
     "node": ">=22.6"

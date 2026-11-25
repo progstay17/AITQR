@@ -25,7 +25,7 @@ const admin = await (async () => {
   };
 })();
 
-test("the worker's signing path produces a bundle the app trusts", async () => {
+test("the backend signing path produces a bundle the app trusts", async () => {
   const bundle: Bundle = { ...source.bundle, seq: 2, issued: new Date().toISOString() };
   const signed = await signBundle(bundle, admin.seedHex);
 

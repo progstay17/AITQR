@@ -4,12 +4,10 @@
  */
 
 /**
- * Password hashing cost. PBKDF2-SHA256 at 120k rounds costs ~20-35 ms of CPU, which exceeds the
- * per-request CPU budget of Workers free plans; the platform then terminates the Worker and answers
- * "502 Site unavailable". 12k rounds stays in the low single-digit milliseconds. Hosting with a
- * larger CPU budget can raise this with the AITQR_PBKDF2_ITERATIONS variable (paid Workers: up to 30 s).
+ * Default VPS password hashing cost. Successful logins transparently upgrade older stored hashes.
+ * Operators can tune this through AITQR_PBKDF2_ITERATIONS for their VPS hardware.
  */
-export const PBKDF2_ITERATIONS = 12_000;
+export const PBKDF2_ITERATIONS = 120_000;
 export const PBKDF2_MIN_ITERATIONS = 1_000;
 export const PBKDF2_MAX_ITERATIONS = 1_000_000;
 export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;

@@ -1,0 +1,4 @@
+aitqr.40.83.95.72.sslip.io {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000
+}

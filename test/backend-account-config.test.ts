@@ -2,38 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { SqliteDatabase } from "../scripts/sqlite-adapter.mjs";
 import { hashPassword } from "../dist/app/auth.js";
 import { ConfigUnavailableError, loadConfig } from "../dist/app/config/load.js";
 import { signBundle } from "../dist/app/config/sign.js";
-import worker from "../server/worker.js";
+import app from "../server/app.js";
 import { verifySignedBundle } from "../dist/app/config/verify.js";
 import { bytesToHex, kidOf, signerFromSeed } from "../vendor/metaqr/src/index.js";
-
-class Statement {
-  values: unknown[] = [];
-  private db: DatabaseSync;
-  private sql: string;
-  constructor(db: DatabaseSync, sql: string) {
-    this.db = db;
-    this.sql = sql;
-  }
-  bind(...values: unknown[]) { this.values = values; return this; }
-  async first<T = Record<string, unknown>>(): Promise<T | null> {
-    return (this.db.prepare(this.sql).get(...this.values) as T | undefined) ?? null;
-  }
-  async all<T = Record<string, unknown>>(): Promise<{ results: T[] }> {
-    return { results: this.db.prepare(this.sql).all(...this.values) as T[] };
-  }
-  async run() {
-    const result = this.db.prepare(this.sql).run(...this.values);
-    return { success: true, meta: { last_row_id: Number(result.lastInsertRowid), changes: result.changes } };
-  }
-}
-class LocalD1 {
-  private db: DatabaseSync;
-  constructor(db: DatabaseSync) { this.db = db; }
-  prepare(sql: string) { return new Statement(this.db, sql); }
-}
 
 const adminSeed = "44".repeat(32);
 const sessionSecret = "55".repeat(32);
@@ -43,14 +18,14 @@ test("admin field settings are isolated and published per account", async () => 
   const db = new DatabaseSync(":memory:");
   const env = {
     ASSETS: { fetch: async () => new Response("not found", { status: 404 }) },
-    DB: new LocalD1(db),
+    DB: new SqliteDatabase(db),
     APP_ORIGIN: "http://localhost",
     AITQR_ADMIN_KEY: adminSeed,
     AITQR_SESSION_KEY: sessionSecret,
     AITQR_SETUP_CODE: setupCode,
   };
 
-  // Simulate an existing D1 installation before account_configs existed.
+  // Simulate an existing SQLite installation before account_configs existed.
   const legacyTemplate = JSON.parse(readFileSync(new URL("../bundles/default.bundle.json", import.meta.url), "utf8"));
   legacyTemplate.bundle.profiles[0].fields[0].label = { id: "Legacy Template Field", en: "Legacy Template Field" };
   legacyTemplate.bundle.lists.locations = ["Legacy Room"];
@@ -74,7 +49,7 @@ test("admin field settings are isolated and published per account", async () => 
     const headers = new Headers({ Origin: "http://localhost" });
     if (body !== undefined) headers.set("Content-Type", "application/json");
     if (cookie) headers.set("Cookie", cookie);
-    const response = await worker.fetch(new Request("http://localhost" + path, {
+    const response = await app.fetch(new Request("http://localhost" + path, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
     }), env);
     const text = await response.text();

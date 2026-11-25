@@ -24,8 +24,8 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 
 **Non-goals**
 - Memverifikasi atau men-decode QR (tugas tiap alat konsumen; kunci privat decoder tidak pernah masuk AITQR).
-- Penyimpanan riwayat operasional petugas di backend; riwayat penerbitan tetap lokal pada perangkat. D1 menyimpan akun, konfigurasi profil, audit administratif, dan kunci decoder yang dikelola admin.
-- Backend signing untuk QR petugas. QR tetap ditandatangani di browser oleh kunci akun; Worker hanya menandatangani bundel konfigurasi admin.
+- Penyimpanan riwayat operasional petugas di backend; riwayat penerbitan tetap lokal pada perangkat. SQLite menyimpan akun, konfigurasi profil, audit administratif, dan kunci decoder yang dikelola admin.
+- Backend signing untuk QR petugas. QR tetap ditandatangani di browser oleh kunci akun; API server hanya menandatangani bundel konfigurasi admin.
 - Membuktikan identitas orang pemegang HP (hanya perangkat penanda tangan).
 - Membuat ulang kriptografi; memakai encoder JS Metaqr.
 
@@ -42,7 +42,7 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 ```mermaid
 flowchart LR
   A[Admin pilih akun lalu edit profil + daftar pilihan] --> B[Simpan draf dan terbitkan untuk akun terpilih]
-  B --> C[Worker simpan bundle bertanda tangan per akun]
+  B --> C[API server simpan bundle bertanda tangan per akun]
   C --> D[HP login dan mengambil bundle milik akunnya]
   D --> E[HP verifikasi tanda tangan; petugas pilih profil dan isi form]
   E --> F[Validasi + susun payload + cek anggaran ukuran]
@@ -167,7 +167,7 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 
 | ID | Pertanyaan | Catatan |
 |---|---|---|
-| D1 | Hosting (HTTPS statis) dan pemeliharaan. | [A] hosting statis; pemilik sudah memakai Vercel untuk alat lain. |
+| SQLite | Hosting (HTTPS statis) dan pemeliharaan. | [A] hosting statis; pemilik sudah memakai Vercel untuk alat lain. |
 | D2 | Daftar HP/browser target untuk uji WebCrypto. | Menentukan perlu tidaknya fallback. |
 | D3 | Penyimpanan kunci penandatangan bundel admin. | Risiko utama rantai kepercayaan konfigurasi. |
 | D4 | Sumber waktu: jam perangkat saja atau ada cek tambahan. | Mempengaruhi toleransi di ZYB Tool. |
