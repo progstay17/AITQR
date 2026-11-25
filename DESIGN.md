@@ -52,10 +52,11 @@ Blue is the main brand color. Cyan is a limited secondary accent. Do not combine
 
 ### Shape and effects
 
-- Cards: 12–16 px radius.
-- Inputs/buttons: 10–12 px radius.
-- Subtle crisp borders; restrained blue highlights.
-- No glassmorphism, giant gradients, particle backgrounds, animated grids, decorative waveforms or blurred floating panels.
+- Cards: 12–18 px radius; inputs/buttons: 10–12 px radius.
+- Subtle crisp borders, blue edge lighting and restrained cyan highlights.
+- The supplied reference is a visual mood reference, not a page template: borrow deep navy, controlled blue glow, a subtle static geometric/diagonal texture and a short editorial serif-italic accent on the operational home screen.
+- Keep decoration low-opacity and behind content. No marketing landing page, decorative particle field, motion/animated grids, glassmorphism or blurred floating dashboards.
+- Never place visual effects beneath form controls in a way that harms readability, or over/near the QR quiet zone.
 
 ## 3. Mobile-first shell
 
@@ -88,7 +89,7 @@ Answer immediately:
 - Is the configuration bundle valid and current?
 - Which profile is active?
 
-Show a compact readiness panel, active profile, one obvious Start session action and session history as a secondary entry. States include Ready, Offline — using saved configuration, and a blocking error. No marketing hero, sales copy, charts or KPI tiles.
+Show a compact readiness panel, active profile, one obvious Start session action and session history as a secondary entry. States include Ready, Offline — using saved configuration, and a blocking error. No marketing landing page, sales copy, charts or KPI tiles. A compact operational introduction may clarify the next action, but profile selection and readiness remain the primary focus.
 
 ### Metadata form
 
