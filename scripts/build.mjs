@@ -38,10 +38,29 @@ for (const file of ["default.bundle.json", "latest.bundle.json"]) {
   if (existsSync(from)) cpSync(from, join(dist, "bundles", file));
 }
 
-// 4. Vendored dependencies: the compiled app imports ../vendor/metaqr/... and ../vendor/qrcodegen/...
+// 4. Vendored dependencies are copied before frontend bundling so the browser build can inline them.
 cpSync(join(root, "vendor"), join(dist, "vendor"), { recursive: true });
 
-// 5. Build stamp: a content hash, so the service worker cache name changes only when code changes.
+// 5. Bundle the browser entry points. A single JS request per app is faster on first visits
+//    (especially in private browsing, where no prior HTTP or service-worker cache exists).
+for (const entry of ["main", "admin"]) {
+  const input = join(dist, "app", `${entry}.js`);
+  const bundled = join(dist, "app", `${entry}.bundle.js`);
+  await esbuild.build({
+    entryPoints: [input],
+    outfile: bundled,
+    bundle: true,
+    minify: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    logLevel: "warning",
+  });
+  writeFileSync(input, readFileSync(bundled));
+  rmSync(bundled);
+}
+
+// 6. Build stamp: a content hash, so the service worker cache name changes only when code changes.
 const hash = createHash("sha256");
 for (const file of walk(dist).sort()) hash.update(relative(dist, file)).update(readFileSync(file));
 const build = hash.digest("hex").slice(0, 12);
@@ -49,11 +68,11 @@ const build = hash.digest("hex").slice(0, 12);
 cpSync(join(root, "sw.js"), join(dist, "sw.js"));
 writeFileSync(join(dist, "sw.js"), readFileSync(join(dist, "sw.js"), "utf8").replace("__BUILD__", build));
 
-// 6. Response security headers are attached by the Node.js application server.
+// 7. Response security headers are attached by the Node.js application server.
 
 if (!existsSync(join(dist, "app/main.js"))) throw new Error("build did not produce dist/app/main.js");
 
-// 7. Node.js API bundle. It lives outside dist/ so backend source is never served as an asset.
+// 8. Node.js API bundle. It lives outside dist/ so backend source is never served as an asset.
 //    The resolver lets backend imports use the same ".js" specifiers as the browser code.
 const jsToTs = {
   name: "js-to-ts",
