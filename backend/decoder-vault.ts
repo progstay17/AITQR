@@ -19,21 +19,26 @@ function fromBase64(value: string): Uint8Array {
 
 async function vaultKey(masterKey: string): Promise<CryptoKey> {
   const raw = fromHex(masterKey.trim());
-  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  try { return await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]); }
+  finally { raw.fill(0); }
 }
 
-export async function sealDecoderKey(privateKeyHex: string, masterKey: string): Promise<{ iv: string; ciphertext: string }> {
+function keyContext(accountId: string, kid: string): Uint8Array {
+  return encoder.encode("aitqr-decoder-key/v1:" + accountId + ":" + kid);
+}
+
+export async function sealDecoderKey(privateKeyHex: string, masterKey: string, accountId: string, kid: string): Promise<{ iv: string; ciphertext: string }> {
   const raw = fromHex(privateKeyHex);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await vaultKey(masterKey);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(privateKeyHex.toLowerCase())));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: keyContext(accountId, kid) }, key, encoder.encode(privateKeyHex.toLowerCase())));
   raw.fill(0);
   return { iv: toBase64(iv), ciphertext: toBase64(ciphertext) };
 }
 
-export async function openDecoderKey(ivText: string, ciphertextText: string, masterKey: string): Promise<Uint8Array> {
+export async function openDecoderKey(ivText: string, ciphertextText: string, masterKey: string, accountId: string, kid: string): Promise<Uint8Array> {
   const key = await vaultKey(masterKey);
-  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(ivText), tagLength: 128 }, key, fromBase64(ciphertextText));
+  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(ivText), additionalData: keyContext(accountId, kid), tagLength: 128 }, key, fromBase64(ciphertextText));
   const hex = new TextDecoder().decode(plaintext);
   if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("Stored decoder key is invalid");
   return Uint8Array.from(hex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16));
