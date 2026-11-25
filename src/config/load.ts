@@ -121,9 +121,9 @@ async function loadAccountConfig(accountId: string, trusted: TrustedAdminKey[], 
     }
   }
 
+  let remoteError: ConfigUnavailableError | null = null;
   if (!offline) {
     let remoteRaw: unknown | null = null;
-    let remoteError: ConfigUnavailableError | null = null;
     try {
       remoteRaw = await fetchAccountBundle();
     } catch (error) {
