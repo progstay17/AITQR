@@ -1,0 +1,43 @@
+{
+  "format": "aitqr/vectors/1",
+  "generatedFor": "zyb-recording",
+  "vectors": [
+    {
+      "profile": "zyb-recording",
+      "profileVersion": 1,
+      "schemaId": "zyb-recording/v1",
+      "consumer": "zyb-tool",
+      "recipientKid": "decoder-test-01",
+      "recipientPublic": "3d5e58c2f7c79621c056040df395c016b49676497198879465e5a75e9834ec53",
+      "deviceSeed": "1111111111111111111111111111111111111111111111111111111111111111",
+      "devicePublic": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+      "deviceKid": "10ba682c8ad13513",
+      "sessionId": "7QF3K9M2T8WX4R6B",
+      "iat": 1795593600,
+      "nonceHex": "0001020304050607",
+      "values": {
+        "recorder": "P-0427",
+        "shift": 1,
+        "batch": "MM3201",
+        "location": "Ruang A",
+        "activity": "Pemeriksaan",
+        "device_no": "ZY001",
+        "device_id": "box-20260819-81e2"
+      },
+      "payload": {
+        "p": "zyb-recording",
+        "pv": 1,
+        "s": "7QF3K9M2T8WX4R6B",
+        "r": "P-0427",
+        "sh": 1,
+        "b": "MM3201",
+        "l": "Ruang A",
+        "a": "Pemeriksaan",
+        "dn": "ZY001",
+        "di": "box-20260819-81e2"
+      },
+      "payloadCanonical": "{\"a\":\"Pemeriksaan\",\"b\":\"MM3201\",\"di\":\"box-20260819-81e2\",\"dn\":\"ZY001\",\"l\":\"Ruang A\",\"p\":\"zyb-recording\",\"pv\":1,\"r\":\"P-0427\",\"s\":\"7QF3K9M2T8WX4R6B\",\"sh\":1}",
+      "token": "MQ2:5:1H8DVRQ35D64G1JD16UJKVY5JG0F%807:7CKKK8QR9F2-1I+NQ6061FYX4F6RE9S/OR/8HT2S1%73R2J/GAYII7HE:EJDNPMEKYUOXOI$VTEB3QN9S4GQI.82RZ2UHFV-H/23JAVA.EUBGPO2YPBU:7P*NVLLIFN0HTGQ7%XMVZR-:QDN6*1QR85:FDC4O:N1BGS940KL93MV3EJT3C6%E .3AI1/X9QR36OUF84845*RG98WNS9T*TK32K84P+AP+4MMPXQ8%IPRDN9P18L7M152Y39LFDZT.PGK-L8I7 W7.BV-WR644T960O0TEKH1WHAE$RC$VBCMCDANEWR7-5G43G-M01IO0N1QHMMNN:L0BOL$I2QBE+QJ*POHM2O1IW9-:OP*AL9RZ7D:2QADIQ659 DP4B+55GEAX9V2NGH1"
+    }
+  ]
+}

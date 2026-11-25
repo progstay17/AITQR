@@ -1,0 +1,20 @@
+{
+  "name": "AITQR",
+  "short_name": "AITQR",
+  "description": "Penerbit QR sesi aman untuk petugas lapangan.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#071426",
+  "theme_color": "#071426",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

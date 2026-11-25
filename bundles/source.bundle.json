@@ -1,0 +1,131 @@
+{
+  "bundle": {
+    "schema": "aitqr.bundle/1",
+    "seq": 1,
+    "issued": "2026-11-25T00:00:00Z",
+    "max_age_days": null,
+    "global": {
+      "default_locale": "id",
+      "require_persisted_key": true,
+      "qr": { "ecc": "Q", "quiet_modules": 4 },
+      "allowed_profiles": ["zyb-recording"]
+    },
+    "lists": {
+      "devices": ["ZY001", "ZY005", "ZY012"],
+      "locations": ["Ruang A", "Ruang B", "Gudang 1", "Lobby"],
+      "activities": ["Pemeriksaan", "Pemeliharaan", "Serah terima"],
+      "shifts": [1, 2, 3]
+    },
+    "profiles": [
+      {
+        "id": "zyb-recording",
+        "version": 1,
+        "title": { "id": "Rekaman ZYB", "en": "ZYB recording" },
+        "consumer": "zyb-tool",
+        "recipient": {
+          "kid": "decoder-test-01",
+          "public": "3d5e58c2f7c79621c056040df395c016b49676497198879465e5a75e9834ec53"
+        },
+        "schema_id": "zyb-recording/v1",
+        "fields": [
+          {
+            "key": "recorder",
+            "type": "text",
+            "label": { "id": "Nama petugas", "en": "Operator name" },
+            "short": "r",
+            "required": true,
+            "max": 40,
+            "group": "details",
+            "sample": "P-0427",
+            "help": {
+              "id": "Nama atau nomor petugas yang memulai rekaman.",
+              "en": "Name or staff number of the operator starting the recording."
+            }
+          },
+          {
+            "key": "shift",
+            "type": "select",
+            "label": { "id": "Shift", "en": "Shift" },
+            "short": "sh",
+            "list": "shifts",
+            "required": true,
+            "group": "details"
+          },
+          {
+            "key": "batch",
+            "type": "text",
+            "label": { "id": "Kode batch (MM…)", "en": "Batch code (MM…)" },
+            "short": "b",
+            "required": true,
+            "pattern": "^MM\\d{2,4}$",
+            "group": "details",
+            "sample": "MM3201",
+            "help": {
+              "id": "Dua sampai empat digit setelah awalan MM.",
+              "en": "Two to four digits after the MM prefix."
+            }
+          },
+          {
+            "key": "location",
+            "type": "select",
+            "label": { "id": "Lokasi/ruangan", "en": "Location/room" },
+            "short": "l",
+            "list": "locations",
+            "required": true,
+            "group": "place"
+          },
+          {
+            "key": "activity",
+            "type": "select",
+            "label": { "id": "Aktivitas", "en": "Activity" },
+            "short": "a",
+            "list": "activities",
+            "required": true,
+            "group": "place"
+          },
+          {
+            "key": "device_no",
+            "type": "select",
+            "label": { "id": "Nomor device", "en": "Device number" },
+            "short": "dn",
+            "list": "devices",
+            "required": true,
+            "group": "camera"
+          },
+          {
+            "key": "device_id",
+            "type": "device_id",
+            "label": { "id": "ID kamera", "en": "Camera ID" },
+            "short": "di",
+            "required": true,
+            "max": 40,
+            "pattern": "^box-[a-z0-9-]+$",
+            "group": "camera",
+            "sample": "box-20260819-81e2",
+            "help": {
+              "id": "Sesuai label pada kamera. Jangan menebak.",
+              "en": "Match the label on the camera. Never guess it."
+            }
+          }
+        ],
+        "derived": [
+          {
+            "key": "sid",
+            "type": "computed",
+            "source": "session_id",
+            "short": "s",
+            "label": { "id": "ID sesi", "en": "Session ID" }
+          },
+          {
+            "key": "issued",
+            "type": "computed",
+            "source": "device_clock",
+            "label": { "id": "Waktu perangkat", "en": "Device time" }
+          }
+        ],
+        "limits": { "max_token_chars": 800, "target_token_chars": 400 },
+        "qr": { "ecc": "Q", "min_display_ratio": 0.74 }
+      }
+    ]
+  }
+}
