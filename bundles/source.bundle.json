@@ -6,21 +6,45 @@
     "max_age_days": null,
     "global": {
       "default_locale": "id",
-      "require_persisted_key": true,
-      "qr": { "ecc": "Q", "quiet_modules": 4 },
-      "allowed_profiles": ["zyb-recording"]
+      "qr": {
+        "ecc": "Q",
+        "quiet_modules": 4
+      },
+      "allowed_profiles": [
+        "zyb-recording"
+      ]
     },
     "lists": {
-      "devices": ["ZY001", "ZY005", "ZY012"],
-      "locations": ["Ruang A", "Ruang B", "Gudang 1", "Lobby"],
-      "activities": ["Pemeriksaan", "Pemeliharaan", "Serah terima"],
-      "shifts": [1, 2, 3]
+      "devices": [
+        "ZY001",
+        "ZY005",
+        "ZY012"
+      ],
+      "locations": [
+        "Ruang A",
+        "Ruang B",
+        "Gudang 1",
+        "Lobby"
+      ],
+      "activities": [
+        "Pemeriksaan",
+        "Pemeliharaan",
+        "Serah terima"
+      ],
+      "shifts": [
+        1,
+        2,
+        3
+      ]
     },
     "profiles": [
       {
         "id": "zyb-recording",
         "version": 1,
-        "title": { "id": "Rekaman ZYB", "en": "ZYB recording" },
+        "title": {
+          "id": "Rekaman ZYB",
+          "en": "ZYB recording"
+        },
         "consumer": "zyb-tool",
         "recipient": {
           "kid": "decoder-test-01",
@@ -31,7 +55,10 @@
           {
             "key": "recorder",
             "type": "text",
-            "label": { "id": "Nama petugas", "en": "Operator name" },
+            "label": {
+              "id": "Nama petugas",
+              "en": "Operator name"
+            },
             "short": "r",
             "required": true,
             "max": 40,
@@ -45,7 +72,10 @@
           {
             "key": "shift",
             "type": "select",
-            "label": { "id": "Shift", "en": "Shift" },
+            "label": {
+              "id": "Shift",
+              "en": "Shift"
+            },
             "short": "sh",
             "list": "shifts",
             "required": true,
@@ -54,7 +84,10 @@
           {
             "key": "batch",
             "type": "text",
-            "label": { "id": "Kode batch (MM…)", "en": "Batch code (MM…)" },
+            "label": {
+              "id": "Kode batch (MM…)",
+              "en": "Batch code (MM…)"
+            },
             "short": "b",
             "required": true,
             "pattern": "^MM\\d{2,4}$",
@@ -68,7 +101,10 @@
           {
             "key": "location",
             "type": "select",
-            "label": { "id": "Lokasi/ruangan", "en": "Location/room" },
+            "label": {
+              "id": "Lokasi/ruangan",
+              "en": "Location/room"
+            },
             "short": "l",
             "list": "locations",
             "required": true,
@@ -77,7 +113,10 @@
           {
             "key": "activity",
             "type": "select",
-            "label": { "id": "Aktivitas", "en": "Activity" },
+            "label": {
+              "id": "Aktivitas",
+              "en": "Activity"
+            },
             "short": "a",
             "list": "activities",
             "required": true,
@@ -86,7 +125,10 @@
           {
             "key": "device_no",
             "type": "select",
-            "label": { "id": "Nomor device", "en": "Device number" },
+            "label": {
+              "id": "Nomor device",
+              "en": "Device number"
+            },
             "short": "dn",
             "list": "devices",
             "required": true,
@@ -95,7 +137,10 @@
           {
             "key": "device_id",
             "type": "device_id",
-            "label": { "id": "ID kamera", "en": "Camera ID" },
+            "label": {
+              "id": "ID kamera",
+              "en": "Camera ID"
+            },
             "short": "di",
             "required": true,
             "max": 40,
@@ -114,17 +159,29 @@
             "type": "computed",
             "source": "session_id",
             "short": "s",
-            "label": { "id": "ID sesi", "en": "Session ID" }
+            "label": {
+              "id": "ID sesi",
+              "en": "Session ID"
+            }
           },
           {
             "key": "issued",
             "type": "computed",
             "source": "device_clock",
-            "label": { "id": "Waktu perangkat", "en": "Device time" }
+            "label": {
+              "id": "Waktu perangkat",
+              "en": "Device time"
+            }
           }
         ],
-        "limits": { "max_token_chars": 800, "target_token_chars": 400 },
-        "qr": { "ecc": "Q", "min_display_ratio": 0.74 }
+        "limits": {
+          "max_token_chars": 800,
+          "target_token_chars": 400
+        },
+        "qr": {
+          "ecc": "Q",
+          "min_display_ratio": 0.74
+        }
       }
     ]
   }

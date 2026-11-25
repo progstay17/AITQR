@@ -8,14 +8,14 @@ import type { Bundle, FieldDef, Localized, Profile } from "./types.js";
 
 interface AdminSession {
   signedIn: boolean;
-  user: { username: string; displayName: string | null; role: string; publicKey: string | null } | null;
+  user: { username: string; displayName: string | null; role: string } | null;
 }
 
 interface Health {
   admins: number;
   users: number;
   publishedSeq: number | null;
-  configured: { adminKey: boolean; sessionKey: boolean; decoderSecret: boolean };
+  configured: { adminKey: boolean; sessionKey: boolean };
 }
 
 interface UserRow {
@@ -23,8 +23,6 @@ interface UserRow {
   username: string;
   displayName: string | null;
   role: string;
-  publicKey: string | null;
-  kid: string | null;
   status: string;
   createdAt: number;
   lastSeenAt: number | null;
@@ -53,19 +51,8 @@ interface AdminState {
   users: UserRow[];
   accountConfigs: AccountConfigRow[];
   audit: AuditRow[];
-  keys: { adminKeyConfigured: boolean; decoderSecretConfigured: boolean };
 }
 
-interface VerifyResult {
-  ok: boolean;
-  code?: string | null;
-  kid?: string;
-  account?: { username: string; label: string | null; status: string };
-  issuedAt?: number;
-  compressed?: boolean;
-  metadata?: Record<string, unknown>;
-  error?: string;
-}
 
 interface State {
   session: AdminSession | null;
@@ -78,7 +65,7 @@ interface State {
   busy: string;
   notice: string | null;
   loginError: string | null;
-  verify: VerifyResult | null;
+  activeTab: "qr" | "users" | "audit";
 }
 
 const state: State = {
@@ -92,11 +79,9 @@ const state: State = {
   busy: "",
   notice: null,
   loginError: null,
-  verify: null,
+  activeTab: "qr",
 };
 
-let secretBuffer = "";
-let tokenBuffer = "";
 
 const root = (): HTMLElement => document.getElementById("main") as HTMLElement;
 const header = (): HTMLElement => document.getElementById("app-header") as HTMLElement;
@@ -604,221 +589,66 @@ function renderFields(): HTMLElement | null {
 
 function renderUsers(): HTMLElement | null {
   const users = state.loaded?.users ?? [];
-  const username = el("input", {
-    class: "input",
-    attrs: { type: "text", autocapitalize: "none", placeholder: "petugas01" },
-  }) as HTMLInputElement;
+  const username = el("input", { class: "input", attrs: { type: "text", autocapitalize: "none", placeholder: "petugas01" } }) as HTMLInputElement;
   const display = el("input", { class: "input", attrs: { type: "text", placeholder: "Nama tampilan" } }) as HTMLInputElement;
-  const password = el("input", {
-    class: "input",
-    attrs: { type: "password", autocomplete: "new-password", minlength: 8 },
-  }) as HTMLInputElement;
-  const publicKey = el("input", {
-    class: "input mono",
-    attrs: { type: "text", placeholder: "64 hex Ed25519", spellcheck: "false" },
-  }) as HTMLInputElement;
-  const role = el(
-    "select",
-    { class: "input" },
-    [el("option", { attrs: { value: "staff" }, text: "staff" }), el("option", { attrs: { value: "admin" }, text: "admin" })],
-  ) as HTMLSelectElement;
-
-  return card(
-    "Akun",
-    [
-      el("p", {
-        class: "muted small",
-        text: "Buat username + kata sandi, lalu tempel public key akun (Ed25519). Aplikasi tidak membuat kunci.",
-      }),
-      el("div", { class: "grid-2" }, [
-        el("label", { class: "field" }, [el("span", { class: "field-label", text: "Username" }), username]),
-        el("label", { class: "field" }, [el("span", { class: "field-label", text: "Nama tampilan" }), display]),
-        el("label", { class: "field" }, [el("span", { class: "field-label", text: "Kata sandi (min. 8)" }), password]),
-        el("label", { class: "field" }, [el("span", { class: "field-label", text: "Public key" }), publicKey]),
-        el("label", { class: "field" }, [el("span", { class: "field-label", text: "Peran" }), role]),
-      ]),
-      el("div", { class: "actions actions-row" }, [
-        button(
-          "Tambah akun",
-          () => {
-            void api<{ id: string }>("/api/admin/users", {
-              method: "POST",
-              body: JSON.stringify({
-                action: "create",
-                username: username.value,
-                displayName: display.value,
-                password: password.value,
-                publicKey: publicKey.value,
-                role: role.value,
-              }),
-            })
-              .then((result) => {
-                state.accountId = result.id;
-                state.profileId = null;
-                return refresh().then(() => note("Akun dibuat dengan konfigurasi field miliknya sendiri."));
-              })
-              .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
-          },
-          "primary",
-        ),
-        el("a", { class: "button button-secondary", attrs: { href: "/api/admin/allowlist" }, text: "Unduh allowlist.json" }),
-      ]),
-      users.length === 0
-        ? el("p", { class: "muted", text: "Belum ada akun." })
-        : el(
-            "ul",
-            { class: "history-list" },
-            users.map((user) => userRow(user)),
-          ),
-    ],
-    "Setiap akun punya satu kunci tanda tangan; public key-nya dipakai decoder untuk memeriksa QR.",
-  );
+  const password = el("input", { class: "input", attrs: { type: "password", autocomplete: "new-password", minlength: 8 } }) as HTMLInputElement;
+  const role = el("select", { class: "input" }, [
+    el("option", { attrs: { value: "staff" }, text: "Petugas" }),
+    el("option", { attrs: { value: "admin" }, text: "Admin" }),
+  ]) as HTMLSelectElement;
+  return card("Akun petugas", [
+    el("p", { class: "muted small", text: "Buat akun dengan username dan kata sandi. Tidak perlu public key atau pairing perangkat." }),
+    el("div", { class: "grid-2" }, [
+      el("label", { class: "field" }, [el("span", { class: "field-label", text: "Username" }), username]),
+      el("label", { class: "field" }, [el("span", { class: "field-label", text: "Nama tampilan" }), display]),
+      el("label", { class: "field" }, [el("span", { class: "field-label", text: "Kata sandi (min. 8)" }), password]),
+      el("label", { class: "field" }, [el("span", { class: "field-label", text: "Peran" }), role]),
+    ]),
+    el("div", { class: "actions actions-row" }, [button("Tambah akun", () => {
+      void api<{ id: string }>("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "create", username: username.value, displayName: display.value, password: password.value, role: role.value }) })
+        .then((result) => { state.accountId = result.id; state.profileId = null; return refresh().then(() => note("Akun petugas dibuat.")); })
+        .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+    }, "primary")]),
+    users.length === 0 ? el("p", { class: "muted", text: "Belum ada akun." }) : el("ul", { class: "history-list" }, users.map((user) => userRow(user))),
+  ], "Akun hanya mengatur akses masuk. QR dienkripsi untuk public key decoder, bukan ditandatangani per petugas.");
 }
 
 function userRow(user: UserRow): HTMLElement {
-  const keyInput = el("input", {
-    class: "input mono",
-    attrs: { type: "text", placeholder: "64 hex Ed25519", spellcheck: "false" },
-    props: { value: user.publicKey ?? "" },
-  }) as HTMLInputElement;
-  const passwordInput = el("input", {
-    class: "input",
-    attrs: { type: "password", autocomplete: "new-password", placeholder: "kata sandi baru (min. 8)" },
-  }) as HTMLInputElement;
-
+  const passwordInput = el("input", { class: "input", attrs: { type: "password", autocomplete: "new-password", placeholder: "kata sandi baru (min. 8)" } }) as HTMLInputElement;
   return el("li", { class: "history-item history-item-stack" }, [
     el("div", { class: "stack-tight" }, [
-      el("span", { text: `${user.displayName ?? user.username} · ${user.role}` }),
-      el("span", { class: "mono small muted", text: `${user.username} · ${user.status}${user.kid ? ` · kid ${user.kid}` : ""}` }),
+      el("span", { text: `${user.displayName ?? user.username} ? ${user.role}` }),
+      el("span", { class: "mono small muted", text: `${user.username} ? ${user.status}` }),
     ]),
-    el("div", { class: "grid-2" }, [
-      el("label", { class: "field" }, [el("span", { class: "field-label", text: "Public key" }), keyInput]),
-      el("label", { class: "field" }, [el("span", { class: "field-label", text: "Reset kata sandi" }), passwordInput]),
-    ]),
+    el("label", { class: "field" }, [el("span", { class: "field-label", text: "Reset kata sandi" }), passwordInput]),
     el("div", { class: "actions actions-row" }, [
-      button(
-        "Simpan kunci",
-        () => {
-          void api("/api/admin/users", {
-            method: "POST",
-            body: JSON.stringify({ action: "update", id: user.id, publicKey: keyInput.value }),
-          })
-            .then(() => refresh().then(() => note("Public key diperbarui.")))
-            .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
-        },
-        "primary",
-      ),
-      button(
-        "Simpan sandi",
-        () => {
-          void api("/api/admin/users", {
-            method: "POST",
-            body: JSON.stringify({ action: "password", id: user.id, password: passwordInput.value }),
-          })
-            .then(() => refresh().then(() => note("Kata sandi diperbarui.")))
-            .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
-        },
-        "secondary",
-      ),
-      button(
-        user.status === "active" ? "Nonaktifkan" : "Aktifkan",
-        () => {
-          void api("/api/admin/users", {
-            method: "POST",
-            body: JSON.stringify({ action: "update", id: user.id, status: user.status === "active" ? "disabled" : "active" }),
-          })
-            .then(() => refresh().then(() => note("Status diperbarui.")))
-            .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
-        },
-        user.status === "active" ? "danger" : "secondary",
-      ),
-      button(
-        "Hapus",
-        () => {
-          if (!window.confirm(`Hapus akun ${user.username}?`)) return;
-          void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "delete", id: user.id }) })
-            .then(() => refresh().then(() => note("Akun dihapus.")))
-            .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
-        },
-        "danger",
-      ),
+      button("Simpan sandi", () => {
+        void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "password", id: user.id, password: passwordInput.value }) })
+          .then(() => refresh().then(() => note("Kata sandi diperbarui.")))
+          .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+      }, "secondary"),
+      button(user.status === "active" ? "Nonaktifkan" : "Aktifkan", () => {
+        void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "update", id: user.id, status: user.status === "active" ? "disabled" : "active" }) })
+          .then(() => refresh().then(() => note("Status diperbarui.")))
+          .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+      }, user.status === "active" ? "danger" : "secondary"),
+      button("Hapus", () => {
+        if (!window.confirm(`Hapus akun ${user.username}?`)) return;
+        void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "delete", id: user.id }) })
+          .then(() => refresh().then(() => note("Akun dihapus.")))
+          .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+      }, "danger"),
     ]),
   ]);
 }
 
 function renderKeys(): HTMLElement | null {
-  const doc = state.doc;
   const profile = selectedProfile();
-  if (!doc) return null;
-  const keys = state.loaded?.keys;
-
-  return card(
-    "Kunci",
-    [
-      el("p", {
-        class: "muted small",
-        text: "Public key penerima dipakai untuk mengenkripsi QR. Kunci rahasia hanya disimpan di server untuk memverifikasi token.",
-      }),
-      profile
-        ? el("div", { class: "grid-2" }, [
-            input(profile.recipient.kid, (next) => {
-              profile.recipient.kid = next.trim();
-              state.dirty = true;
-            }, { label: "Kid penerima (decoder)", mono: true }),
-            input(profile.recipient.public, (next) => {
-              profile.recipient.public = next.trim();
-              state.dirty = true;
-            }, { label: "Public key penerima (X25519, hex/base64url)", mono: true }),
-          ])
-        : null,
-      el("p", {
-        class: "muted small mono",
-        text: `Kunci admin bundel: ${keys?.adminKeyConfigured ? "terpasang" : "belum"} · kunci rahasia decoder: ${
-          keys?.decoderSecretConfigured ? "tersimpan" : "belum"
-        }`,
-      }),
-      el("hr", { class: "rule" }),
-      el("h3", { class: "card-subtitle", text: "Kunci rahasia decoder" }),
-      el("div", { class: "actions actions-row" }, [
-        input("", (next) => {
-          secretBuffer = next.trim();
-        }, { label: "Kunci rahasia decoder (64 hex)", type: "password", mono: true }),
-        button("Simpan", () => void saveDecoderSecret(), "primary"),
-        button(
-          "Hapus",
-          () => {
-            secretBuffer = "";
-            void saveDecoderSecret();
-          },
-          "danger",
-        ),
-      ]),
-      el("hr", { class: "rule" }),
-      el("h3", { class: "card-subtitle", text: "Verifikasi token" }),
-      el("label", { class: "field" }, [
-        el("span", { class: "field-label", text: "Tempel token MQ2" }),
-        el("textarea", {
-          class: "input textarea mono",
-          attrs: { placeholder: "MQ2:…" },
-          on: { input: (event) => (tokenBuffer = (event.target as HTMLTextAreaElement).value.trim()) },
-        }),
-      ]),
-      button("Verifikasi", () => void verifyToken(), "secondary"),
-      state.verify ? renderVerifyResult(state.verify) : null,
-    ],
-    "Public key dan secret key decoder dikelola di sini, bukan di perangkat petugas.",
-  );
-}
-
-function renderVerifyResult(result: VerifyResult): HTMLElement {
-  return el("div", { class: `notice ${result.ok ? "notice-info" : "notice-warn"}` }, [
-    el("p", {
-      class: "mono small",
-      text: result.ok
-        ? `Sah · akun ${result.account?.label ?? result.account?.username ?? "-"} · kid ${result.kid}`
-        : `Tidak sah · ${result.code ?? result.error ?? "gagal"}`,
-    }),
-    result.ok ? el("pre", { class: "code-block", text: JSON.stringify(result.metadata, null, 2) }) : null,
+  if (!profile) return null;
+  return card("Enkripsi QR", [
+    el("p", { class: "muted small", text: "Tempel public key X25519 dari ZYBTool. AITQR hanya mengenkripsi QR; private key tetap berada di komputer ZYBTool." }),
+    input(profile.recipient.public, (next) => { profile.recipient.public = next.trim().toLowerCase(); state.dirty = true; }, { label: "Public key decoder (64 karakter hex)", mono: true, placeholder: "Public key dari ZYBTool" }),
+    el("p", { class: "muted small", text: "Format MQ1: terenkripsi, tanpa signing key petugas dan tanpa allow-list." }),
   ]);
 }
 
@@ -877,29 +707,6 @@ function renderAudit(): HTMLElement | null {
 }
 
 // ---------------------------------------------------------------- actions
-
-async function saveDecoderSecret(): Promise<void> {
-  try {
-    await api("/api/admin/keys", { method: "POST", body: JSON.stringify({ decoderSecret: secretBuffer }) });
-    secretBuffer = "";
-    await load();
-    note("Kunci rahasia decoder diperbarui.");
-  } catch (error) {
-    note(error instanceof Error ? error.message : String(error));
-  }
-}
-
-async function verifyToken(): Promise<void> {
-  try {
-    state.verify = await api<VerifyResult>("/api/admin/verify", {
-      method: "POST",
-      body: JSON.stringify({ token: tokenBuffer }),
-    });
-    render();
-  } catch (error) {
-    note(error instanceof Error ? error.message : String(error));
-  }
-}
 
 async function saveDraft(): Promise<void> {
   if (!state.doc || !state.accountId) return;
@@ -986,14 +793,15 @@ function render(): void {
           ])
         : null,
       el("div", { class: "page-head" }, [
-        el("h1", { class: "page-title", text: "Konsol admin" }),
+        el("h1", { class: "page-title", text: "Pengaturan AITQR" }),
         el("p", { class: "muted small", text: `Masuk sebagai ${state.session.user?.username ?? "-"} · ${state.session.user?.role ?? ""}` }),
       ]),
-      renderFields(),
-      renderUsers(),
-      renderKeys(),
-      renderPublish(),
-      renderAudit(),
+      el("nav", { class: "admin-tabs", attrs: { "aria-label": "Pengaturan AITQR" } }, [
+        ...([ ["qr", "QR & Profil"], ["users", "Akun Petugas"], ["audit", "Aktivitas"] ] as const).map(([id, label]) =>
+          el("button", { class: `admin-tab${state.activeTab === id ? " active" : ""}`, attrs: { type: "button", "aria-pressed": String(state.activeTab === id) }, text: label, on: { click: () => { state.activeTab = id; render(); } } }),
+        ),
+      ]),
+      ...(state.activeTab === "qr" ? [renderFields(), renderKeys(), renderPublish()] : state.activeTab === "users" ? [renderUsers()] : [renderAudit()]),
       el("div", { class: "actions actions-stack" }, [button("Keluar", () => void logout(), "secondary")]),
     ]),
   );

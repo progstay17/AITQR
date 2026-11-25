@@ -10,22 +10,22 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 
 - Alat verifikasi butuh konteks tepercaya yang ditempel saat kejadian (siapa/di mana/apa/kapan), tetapi perangkat perekam tidak menyimpannya (ZYB Tool: blok `people` kamera kosong [F]).
 - Tiap alat butuh field berbeda. Menanam form di kode per alat membuat web tool harus diubah dan dirilis ulang setiap ada alat baru atau daftar pilihan baru (lokasi, aktivitas, nomor device).
-- QR harus ditandatangani perangkat dan dienkripsi ke decoder (Metaqr MQ2) agar tidak bisa dipalsukan atau dibaca pihak lain, dan harus berjalan di HP tanpa aplikasi Android khusus.
+- QR harus dienkripsi ke decoder (Metaqr MQ1/X25519) agar isi metadata tidak dapat dibaca pihak lain, dan harus berjalan di HP tanpa aplikasi Android khusus. MQ1 tidak mengautentikasi pembuat QR.
 
 ## 2. Goals dan non-goals
 
 **Goals**
-1. Web/PWA responsif yang menghasilkan QR MQ2 dari **profil** konfigurasi, tanpa perubahan kode untuk alat atau field baru.
+1. Web/PWA responsif yang menghasilkan QR MQ1 terenkripsi dari **profil** konfigurasi, tanpa perubahan kode untuk alat atau field baru.
 2. **Pengaturan platform global** dan **konfigurasi form/profil per akun**. Setiap akun memiliki field, daftar opsi, profil, penerima/decoder, draf, serta publikasi yang terisolasi dari akun lain.
 3. Konfigurasi didistribusikan sebagai bundel yang ditandatangani admin; HP menolak konfigurasi tak sah.
-4. Manajemen kunci perangkat yang aman di browser, dengan alur pendaftaran ke allowlist alat.
+4. Manajemen akun username/kata sandi; tidak ada kunci tanda tangan perangkat atau allow-list.
 5. Berjalan offline setelah dimuat sekali.
 6. Kontrak jelas dengan konsumen: konsumen memiliki skema payload; AITQR menjalankannya.
 
 **Non-goals**
 - Memverifikasi atau men-decode QR (tugas tiap alat konsumen; kunci privat decoder tidak pernah masuk AITQR).
 - Penyimpanan riwayat operasional petugas di backend; riwayat penerbitan tetap lokal pada perangkat. SQLite menyimpan akun, konfigurasi profil, audit administratif, dan kunci decoder yang dikelola admin.
-- Backend signing untuk QR petugas. QR tetap ditandatangani di browser oleh kunci akun; API server hanya menandatangani bundel konfigurasi admin.
+- Autentikasi identitas pembuat QR; QR hanya dienkripsi ke public key decoder. API server tetap menandatangani bundel konfigurasi admin.
 - Membuktikan identitas orang pemegang HP (hanya perangkat penanda tangan).
 - Membuat ulang kriptografi; memakai encoder JS Metaqr.
 
@@ -34,7 +34,7 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 | Peran | Tugas |
 |---|---|
 | Petugas | Memilih profil, mengisi form, menerbitkan dan menampilkan QR. |
-| Administrator profil | Menulis/mengubah profil dan daftar pilihan, menandatangani bundel konfigurasi, mengelola allowlist alat konsumen. |
+| Administrator profil | Menulis/mengubah profil dan daftar pilihan, mengatur public key decoder, dan menandatangani bundel konfigurasi. |
 | Integrator alat | Mendefinisikan skema payload alat (mis. ZYB Tool) dan memakainya di profil. |
 
 ## 4. Alur end-to-end
@@ -46,7 +46,7 @@ flowchart LR
   C --> D[HP login dan mengambil bundle milik akunnya]
   D --> E[HP verifikasi tanda tangan; petugas pilih profil dan isi form]
   E --> F[Validasi + susun payload + cek anggaran ukuran]
-  F --> G[Encode MQ2: tanda tangan kunci perangkat, enkripsi ke decoder]
+  F --> G[Encode MQ1: enkripsi ke public key decoder (tanpa signature)]
   G --> H[Tampilkan QR layar penuh]
   H --> I[Alat konsumen men-decode dan memverifikasi]
 ```
@@ -97,11 +97,11 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 | FR-01 | Muat bundle terbit milik akun yang sedang login lewat endpoint terautentikasi; verifikasi tanda tangan admin dan anti-rollback per akun; cache offline dipisah per ID akun. Bundle tak sah ditolak. |
 | FR-02 | Render form dari profil; validasi (wajib, panjang, pola, opsi); tampilkan galat jelas. |
 | FR-03 | Field turunan otomatis: `session_id` unik, waktu perangkat; operator tidak dapat mengubahnya. |
-| FR-04 | Susun payload sesuai profil, hitung anggaran ukuran token (batas MQ2) dan blokir jika terlampaui, tampilkan sisa. |
-| FR-05 | Encode MQ2 dengan encoder JS Metaqr memakai kunci perangkat dan kunci publik decoder dari profil. |
+| FR-04 | Susun payload sesuai profil, hitung anggaran ukuran token (batas MQ1) dan blokir jika terlampaui, tampilkan sisa. |
+| FR-05 | Encode MQ1 dengan encoder JS Metaqr memakai public key X25519 decoder dari profil; tidak ada signing key petugas. |
 | FR-06 | Tampilkan QR layar penuh, kontras tinggi, ukuran modul sesuai konfigurasi; opsi menjaga layar tetap menyala [? dukungan browser]. |
-| FR-07 | Kunci perangkat: buat saat pertama pakai (non-extractable), tampilkan `kid`/kunci publik, ekspor kode pendaftaran untuk allowlist alat, peringatkan bila kunci hilang. |
-| FR-08 | Deteksi kapabilitas WebCrypto (Ed25519, X25519) saat mulai; bila tidak didukung, **blokir dengan pesan jelas**, tidak ada penurunan ke token tak bertanda tangan. |
+| FR-07 | Tidak ada keypair petugas. Petugas cukup login dengan akun; AITQR hanya menggunakan public key decoder yang dikonfigurasi admin. |
+| FR-08 | Deteksi kapabilitas WebCrypto (X25519 untuk enkripsi, Ed25519 untuk verifikasi bundle admin) saat mulai; bila tidak didukung, **blokir dengan pesan jelas**. |
 | FR-09 | Riwayat penerbitan lokal di perangkat (session_id, profil, waktu); tidak dikirim ke mana pun. |
 | FR-10 | PWA offline; bahasa Indonesia dan Inggris. |
 | FR-11 | Konsol admin menyediakan CRUD akun dan editor profil/field/daftar opsi per akun; simpan draf dan terbitkan konfigurasi hanya untuk akun terpilih, selain alat lint, anggaran, signing, dan vektor uji. |
@@ -117,11 +117,11 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 ## 8. Aturan bisnis
 
 - **BR-01:** kunci privat decoder tidak pernah ada di AITQR (hanya kunci publik penerima).
-- **BR-02:** kunci tanda tangan perangkat non-extractable; tidak diekspor, tidak dikirim ke server.
+- **BR-02:** AITQR tidak membuat atau menyimpan signing key per petugas.
 - **BR-03:** profil tidak dikenal, versi tidak dikenal, atau bundel tak bertanda tangan sah → tidak ada QR yang diterbitkan.
 - **BR-04:** setiap QR membawa `profile` + `version` + `session_id` unik; satu QR untuk satu sesi, UI default menerbitkan QR baru.
-- **BR-05:** AITQR tidak mengklaim identitas pemegang HP; hanya perangkat yang menandatangani.
-- **BR-06:** tidak ada penurunan keamanan otomatis (mis. QR tanpa signature) saat kapabilitas kurang.
+- **BR-05:** MQ1 tidak mengautentikasi pembuat QR. Siapa pun yang memiliki public key decoder dapat membuat token terenkripsi yang dapat dibaca decoder.
+- **BR-06:** tidak ada fallback kriptografi buatan sendiri; jika X25519 tidak didukung, penerbitan QR diblokir.
 - **BR-07:** skema payload dimiliki konsumen; perubahan skema = versi baru profil, bukan perubahan diam-diam.
 
 ## 9. Kriteria penerimaan
@@ -131,10 +131,10 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 | AC-01 | Menambahkan profil baru lewat bundel (tanpa mengubah kode) memunculkan form baru di aplikasi. |
 | AC-02 | Bundel dengan tanda tangan salah/diubah ditolak; aplikasi tetap memakai bundel sah terakhir dan menampilkan alasan. |
 | AC-03 | Payload melebihi anggaran token diblokir dengan pesan yang menyebut field penyebab. |
-| AC-04 | QR hasil AITQR terbaca dan lolos verifikasi oleh decoder Python Metaqr memakai vektor uji bersama. |
+| AC-04 | QR hasil AITQR dapat didekripsi oleh decoder Python Metaqr menggunakan private key pasangan yang tepat; private key lain gagal. |
 | AC-05 | Dua profil dengan decoder berbeda menghasilkan token yang hanya dapat didekripsi oleh decoder masing-masing. |
 | AC-06 | Setelah muat pertama, aplikasi menerbitkan QR tanpa jaringan. |
-| AC-07 | Kunci perangkat bertahan setelah reload dan tidak dapat diekspor. |
+| AC-07 | Tidak ada private signing key petugas yang perlu disimpan di browser. |
 | AC-08 | Browser tanpa dukungan kripto yang dibutuhkan menampilkan pesan blokir, tanpa QR. |
 | AC-09 | Dua penerbitan berurutan menghasilkan `session_id` berbeda. |
 | AC-10 | Profil ZYB (`zyb-recording`) menghasilkan payload yang lolos validasi skema ZYB Tool. |
@@ -145,7 +145,7 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 | Kasus | Penanganan |
 |---|---|
 | Data situs dihapus / kunci di-evict (terutama iOS) | Deteksi `kid` tersimpan di riwayat tapi kunci hilang → peringatan; buat kunci baru dan minta pendaftaran ulang. |
-| Browser lama tanpa Ed25519/X25519 | Blokir (BR-06). Opsi polyfill (kunci extractable) hanya jika diputuskan eksplisit [?]. |
+| Browser lama tanpa X25519/Ed25519 | Blokir (BR-06). Opsi polyfill (kunci extractable) hanya jika diputuskan eksplisit [?]. |
 | Jam HP salah | `iat` hanya klaim; tampilkan peringatan jika selisih besar dengan jam yang dapat diperiksa [?]. |
 | Payload terlalu panjang | Blokir; saran memperpendek/menghapus field. |
 | Bundel kedaluwarsa atau pembaruan gagal | Pakai bundel sah terakhir; tampilkan umur bundel; kebijakan batas umur dapat dikonfigurasi. |
@@ -156,7 +156,7 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 
 | Tahap | Isi |
 |---|---|
-| M1 | Engine profil + form + payload + encode MQ2 + render QR; satu profil contoh. |
+| M1 | Engine profil + form + payload + encode MQ1 + render QR; satu profil contoh. |
 | M2 | Kunci perangkat + deteksi kapabilitas + uji HP target + uji baca QR dengan kamera nyata. |
 | M3 | Bundel konfigurasi bertanda tangan + alat admin (lint, sign, vektor uji). |
 | M4 | PWA offline + i18n + riwayat lokal. |
@@ -172,6 +172,6 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 | D3 | Penyimpanan kunci penandatangan bundel admin. | Risiko utama rantai kepercayaan konfigurasi. |
 | D4 | Sumber waktu: jam perangkat saja atau ada cek tambahan. | Mempengaruhi toleransi di ZYB Tool. |
 | D5 | Daftar pilihan statis dalam bundel vs diperbarui terpisah. | Cakupan FR-01. |
-| D6 | Multi-penerima (satu QR untuk lebih dari satu alat). | MQ2 mengenkripsi ke satu penerima [F: SPEC Metaqr]; default satu QR per alat. |
+| D6 | Multi-penerima (satu QR untuk lebih dari satu alat). | MQ1 mengenkripsi ke satu penerima [F: SPEC Metaqr]; default satu QR per alat. |
 | D7 | Kebijakan kunci hilang dan pendaftaran ulang. | Proses admin. |
 | D8 | Nama repo GitHub. | Diputuskan: progstay17/AITQR. |

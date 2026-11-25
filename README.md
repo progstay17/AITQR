@@ -1,8 +1,6 @@
 # AITQR
 
-Web/PWA penghasil QR **MQ2** (Metaqr) untuk petugas lapangan. Petugas masuk dengan akun, memilih profil, mengisi metadata sesi, lalu menampilkan QR yang ditandatangani kunci akun di perangkat dan dienkripsi ke public key decoder.
-
-Akun dibuat oleh administrator: username, kata sandi, dan **public key** akun. AITQR tidak pernah membuat kunci akun atau menyimpan private key akun. Petugas mengimpor private key sendiri sekali di browser; kunci disimpan sebagai non-extractable dan QR ditandatangani di perangkat.
+Web/PWA penghasil QR terenkripsi **MQ1** (Metaqr) untuk petugas lapangan. Petugas masuk dengan username/kata sandi, memilih profil, mengisi metadata sesi, lalu menampilkan QR yang dienkripsi langsung ke public key X25519 milik decoder ZYBTool. Tidak ada kunci tanda tangan per petugas.
 
 AITQR berjalan mandiri di **VPS menggunakan Node.js + SQLite**. Caddy menangani HTTPS dan meneruskan request ke aplikasi Node.js di localhost. Tidak ada layanan serverless atau database terkelola eksternal, dan tidak ada integrasi login pihak ketiga.
 
@@ -10,10 +8,10 @@ AITQR berjalan mandiri di **VPS menggunakan Node.js + SQLite**. Caddy menangani 
 
 - Login username + kata sandi, sesi cookie HttpOnly, perlindungan CSRF, dan pembatasan percobaan login.
 - Bootstrap administrator pertama menggunakan kode sekali pakai.
-- Konsol admin untuk CRUD akun, reset kata sandi, public key akun, dan audit.
-- Konfigurasi field, profil, daftar pilihan, serta public key penerima **terisolasi per akun**.
+- Konsol admin sederhana berbasis tab: konfigurasi QR/profil, akun petugas, dan aktivitas. Akun hanya membutuhkan username/kata sandi.
+- Konfigurasi field, profil, daftar pilihan, serta public key decoder **terisolasi per akun**.
 - Draft dan publikasi konfigurasi ditandatangani Ed25519; klien memverifikasi signature dan sequence.
-- Verifikasi token MQ2, pengelolaan decoder secret, dan ekspor allowlist.
+- Penerbitan QR MQ1 terenkripsi X25519. AITQR tidak menyimpan private key decoder dan tidak menggunakan allow-list.
 - PWA offline; cache konfigurasi diberi namespace per akun.
 - SQLite lokal dengan WAL; data disimpan persisten di direktori data VPS.
 
@@ -142,7 +140,7 @@ Buka:
 
 `https://aitqr.40.83.95.72.sslip.io/admin`
 
-Kartu **Buat administrator pertama** tampil jika database belum memiliki akun admin. Masukkan `AITQR_SETUP_CODE`, lalu tentukan username (3â€?2 karakter: huruf kecil, angka, titik, garis bawah, strip) dan password (minimal 8 karakter). Setelah berhasil, hapus baris `AITQR_SETUP_CODE` dari `/etc/aitqr/aitqr.env`, kemudian restart:
+Kartu **Buat administrator pertama** tampil jika database belum memiliki akun admin. Masukkan `AITQR_SETUP_CODE`, lalu tentukan username (3-?2 karakter: huruf kecil, angka, titik, garis bawah, strip) dan password (minimal 8 karakter). Setelah berhasil, hapus baris `AITQR_SETUP_CODE` dari `/etc/aitqr/aitqr.env`, kemudian restart:
 
 ```bash
 sudo systemctl restart aitqr
@@ -169,7 +167,7 @@ Jangan menyalin hanya file database saat WAL sedang aktif tanpa prosedur backup 
 |---|---|---|
 | `AITQR_SESSION_KEY` | Ya | HMAC cookie sesi, 32 byte acak dalam 64 digit hex |
 | `AITQR_ADMIN_KEY` | Ya untuk publikasi | Seed private Ed25519 32 byte dalam hex; public key-nya tertanam pada build |
-| `AITQR_SETUP_CODE` | Saat bootstrap | Kode hex acak 16â€?28 digit; hapus setelah admin pertama dibuat |
+| `AITQR_SETUP_CODE` | Saat bootstrap | Kode hex acak 16-?28 digit; hapus setelah admin pertama dibuat |
 | `APP_ORIGIN` | Ya | Origin publik HTTPS untuk validasi same-origin |
 | `AITQR_DATA_DIR` | Ya di produksi | Direktori file SQLite persisten |
 | `AITQR_PBKDF2_ITERATIONS` | Tidak | PBKDF2-SHA256; default VPS 120000 |
@@ -180,7 +178,7 @@ Jangan menyalin hanya file database saat WAL sedang aktif tanpa prosedur backup 
 | Rute | Akses | Fungsi |
 |---|---|---|
 | `GET /`, `GET /admin` | Publik | Shell PWA/konsol |
-| `GET /api/health` | Publik | Status secret, jumlah admin/user, sequence |
+| `GET /api/health` | Publik | Status service, jumlah admin/user, sequence |
 | `GET /api/session` | Publik | Status sesi saat ini |
 | `POST /api/bootstrap` | Setup code | Membuat administrator pertama |
 | `POST /api/login` | Publik | Login dan membuat cookie sesi |
@@ -191,15 +189,12 @@ Jangan menyalin hanya file database saat WAL sedang aktif tanpa prosedur backup 
 | `* /api/admin/users` | Admin | CRUD akun, reset password, status |
 | `PUT /api/admin/account-config` | Admin | Simpan draft akun terpilih |
 | `POST /api/admin/account-config/publish` | Admin | Terbitkan konfigurasi akun terpilih |
-| `* /api/admin/keys` | Admin | Public key penerima dan decoder secret |
-| `POST /api/admin/verify` | Admin | Verifikasi token MQ2 |
-| `GET /api/admin/allowlist` | Admin | Unduh allowlist |
 
 Tanpa sesi, API admin mengembalikan 401; akun non-admin 403; mutasi lintas-origin 403.
 
 ## Konfigurasi field per akun
 
-Konsol admin memiliki pemilih akun. Profil, field, label ID/EN, tipe, validasi, grup, opsi, public key penerima, draft, serta publikasi disimpan per akun dalam tabel `account_configs`. Mengubah akun A tidak mengubah akun B. API mengambil ID akun dari sesi yang diverifikasi server, bukan dari ID yang dipercayai dari browser.
+Konsol admin memiliki pemilih akun. Profil, field, label ID/EN, tipe, validasi, grup, opsi, public key decoder, draft, serta publikasi disimpan per akun dalam tabel `account_configs`. Mengubah akun A tidak mengubah akun B. API mengambil ID akun dari sesi yang diverifikasi server, bukan dari ID yang dipercayai dari browser.
 
 Akun lama saat migrasi menerima salinan satu kali dari template lama agar konfigurasi sebelumnya tidak hilang. Akun baru mendapat salinan template awal. Setelah itu setiap salinan berdiri sendiri.
 
@@ -211,9 +206,9 @@ Cache offline menggunakan namespace per akun. Service worker tidak menyimpan res
 - Cookie sesi HttpOnly, SameSite=Lax, Secure pada HTTPS, masa berlaku 12 jam.
 - Mutasi admin dilindungi autentikasi, pemeriksaan role, dan same-origin.
 - Login dibatasi setelah lima percobaan gagal.
-- Private key akun petugas tidak pernah dikirim ke server.
+- AITQR tidak membuat private key per petugas; akun hanya menggunakan username/kata sandi.
 - Private seed `AITQR_ADMIN_KEY` hanya berada di environment server; public key pasangannya tertanam di source/build.
-- Decoder secret disimpan di SQLite server dan tidak dikirim kembali ke browser.
+- QR menggunakan MQ1 encrypted-only ke public key decoder; private key decoder tidak pernah berada di server AITQR.
 - SQLite menggunakan WAL dan file datanya berada di luar direktori source/build.
 
 ## Pemeriksaan kualitas
@@ -228,13 +223,13 @@ npm run bundle:budget
 npm run build
 ```
 
-Tes integrasi mencakup bootstrap admin, migrasi konfigurasi lama, isolasi field antar akun, autentikasi, CRUD, verifikasi, allowlist, dan cache offline.
+Tes integrasi mencakup bootstrap admin, migrasi konfigurasi lama, isolasi field antar akun, autentikasi, CRUD, enkripsi/dekripsi MQ1, dan cache offline.
 
 ## Struktur penting
 
 | Path | Isi |
 |---|---|
-| `backend/index.ts` | HTTP API: sesi, akun, konfigurasi, publikasi, verifikasi |
+| `backend/index.ts` | HTTP API: sesi, akun, konfigurasi, publikasi |
 | `scripts/serve.mjs` | Server Node.js, static assets, binding SQLite dan environment |
 | `scripts/sqlite-adapter.mjs` | Adapter SQL untuk API backend |
 | `src/admin.ts`, `admin.html` | Konsol admin |

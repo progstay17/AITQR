@@ -6,7 +6,6 @@
     "max_age_days": null,
     "global": {
       "default_locale": "id",
-      "require_persisted_key": true,
       "qr": {
         "ecc": "Q",
         "quiet_modules": 4
@@ -188,7 +187,7 @@
   },
   "sig": {
     "alg": "Ed25519",
-    "kid": "700334e69ea0ab7d",
-    "value": "5aEENuoa4f_tAi_aRtuqQM5WmtWiFRP9JTpPUpu9SkWRfCvj_g0PxOVWplZ5u9xD89BETroZ8A-qTFvpxESpDA"
+    "kid": "2b1e9ab75b9c99a3",
+    "value": "RvhaEjItxdccAjOO4UOi626S0rVvwJ036q8Tkp2VjbWta60PDWe3ar4aLLS5D6kdIdW4PWNe_uNiT2vlNecxBA"
   }
 }

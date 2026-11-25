@@ -169,21 +169,13 @@ test("admin field settings are isolated and published per account", async () => 
     }, admin);
     beta = await login("staffbeta", "StaffPass-456");
 
-    await expect("/api/admin/keys", "POST", { decoderSecret: "33".repeat(32) }, admin);
-    assert.equal((await expect("/api/health")).configured.decoderSecret, true);
-    const allowlist = await expect("/api/admin/allowlist", "GET", undefined, admin);
-    assert.deepEqual(allowlist.devices.map((device: { id: string }) => device.id).sort(),
-      ["staffalpha", "staffbeta"]);
-    const invalidToken = await expect("/api/admin/verify", "POST", { token: "MQ2:invalid" }, admin);
-    assert.equal(invalidToken.ok, false);
+    await expect("/api/admin/keys", "GET", undefined, admin, 404);
+    await expect("/api/admin/allowlist", "GET", undefined, admin, 404);
 
     await expect("/api/admin/users", "POST", { action: "delete", id: betaId }, admin);
     state = await expect("/api/admin/state", "GET", undefined, admin);
     assert.equal(state.accountConfigs.some((entry: { userId: string }) => entry.userId === betaId), false);
-    await expect("/api/admin/keys", "POST", { decoderSecret: "" }, admin);
-    assert.equal((await expect("/api/health")).configured.decoderSecret, false);
-
-    console.log("Account-scoped config, account CRUD, decoder secret, verification and allow-list passed.");
+    console.log("Account-scoped config, account CRUD, and removal of legacy decoder-secret/allow-list endpoints passed.");
   } finally {
     db.close();
   }

@@ -47,7 +47,6 @@ export function validateProfile(profile: Profile, lists: Record<string, ListValu
   if (!profile.recipient || !/^[0-9a-fA-F]{64}$/.test(profile.recipient.public ?? "")) {
     problems.push(`${where}: recipient.public must be 64 hex characters (X25519 public key)`);
   }
-  if (!profile.recipient?.kid) problems.push(`${where}: recipient.kid is required`);
   if (!Array.isArray(profile.fields) || profile.fields.length === 0) {
     problems.push(`${where}: fields must be a non-empty array`);
     return problems;
@@ -94,7 +93,7 @@ export function validateProfile(profile: Profile, lists: Record<string, ListValu
 
   const limits = profile.limits ?? {};
   if (limits.max_token_chars !== undefined && limits.max_token_chars > 800) {
-    problems.push(`${where}: max_token_chars above the MQ2 hard cap of 800`);
+    problems.push(`${where}: max_token_chars above the MQ1 hard cap of 800`);
   }
   if (limits.target_token_chars !== undefined && limits.target_token_chars < 100) {
     problems.push(`${where}: target_token_chars below 100 is not useful`);

@@ -1,4 +1,4 @@
-/** One IndexedDB connection for the app: local history and the account signing key. */
+/** One IndexedDB connection for the app: local issuance history. */
 import type { IssueRecord } from "./types.js";
 
 export const DB_NAME = "aitqr";

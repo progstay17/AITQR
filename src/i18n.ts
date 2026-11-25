@@ -144,8 +144,8 @@ const DICT: Record<string, Entry> = {
 
   "key.title": ["Identitas perangkat", "Device identity"],
   "key.explain": [
-    "Kunci tanda tangan dibuat di perangkat ini dan tidak dapat diekspor. Administrator mendaftarkan kunci publiknya ke allowlist alat penerima.",
-    "The signing key is created on this device and cannot be exported. An administrator registers its public key in the receiving tool's allowlist.",
+    "QR dienkripsi untuk public key decoder. Tidak perlu kunci tanda tangan petugas atau allow-list.",
+    "The QR is encrypted to the decoder public key. Staff signing keys and allow-lists are not required.",
   ],
   "key.kid": ["ID kunci", "Key ID"],
   "key.public": ["Kunci publik", "Public key"],

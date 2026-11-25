@@ -1,10 +1,9 @@
-import { ConfigUnavailableError, bundleAgeDays, loadConfig } from "./config/load.js";
+﻿import { ConfigUnavailableError, bundleAgeDays, loadConfig } from "./config/load.js";
 import { TRUSTED_ADMIN_KEYS } from "./config/trustedAdminKeys.js";
 import { el, fieldId, replace } from "./dom.js";
 import { addRecord, clearRecords, listRecords, readLocale, rememberLocale } from "./db.js";
 import { t } from "./i18n.js";
-import { KeyImportError, clearAccountKey, loadAccountKey, prepareAccountKey, saveAccountKey } from "./keys.js";
-import { TokenTooLargeError, issueToken } from "./mq2.js";
+import { TokenTooLargeError, issueEncryptedToken } from "./mq1.js";
 import {
   buildPayload,
   derivedValues,
@@ -17,15 +16,12 @@ import { fieldsOf, findProfile, groupsOf, localize, optionsFor, profilesForBundl
 import { renderQr as renderQrSvg } from "./qr.js";
 import { newSessionId } from "./session.js";
 import type { ConfigState, FieldDef, FormValues, IssueRecord, Locale, Profile } from "./types.js";
-import type { StoredAccountKey } from "./keys.js";
 
 interface SessionUser {
   id: string;
   username: string;
   displayName: string | null;
   role: string;
-  publicKey: string | null;
-  kid: string | null;
 }
 
 interface Session {
@@ -37,8 +33,6 @@ type View =
   | { name: "boot" }
   | { name: "login" }
   | { name: "config-error" }
-  | { name: "no-key" }
-  | { name: "key-setup" }
   | { name: "home" }
   | { name: "form" }
   | { name: "review" }
@@ -53,7 +47,6 @@ interface Draft {
 interface State {
   locale: Locale;
   session: Session | null;
-  accountKey: StoredAccountKey | null;
   config: ConfigState | null;
   configError: string | null;
   view: View;
@@ -61,7 +54,6 @@ interface State {
   issues: ValidationIssue[];
   notice: string | null;
   loginError: string | null;
-  keyError: string | null;
   busy: string;
   updateReady: boolean;
 }
@@ -69,7 +61,6 @@ interface State {
 const state: State = {
   locale: readLocale() ?? "id",
   session: null,
-  accountKey: null,
   config: null,
   configError: null,
   view: { name: "boot" },
@@ -77,7 +68,6 @@ const state: State = {
   issues: [],
   notice: null,
   loginError: null,
-  keyError: null,
   busy: "",
   updateReady: false,
 };
@@ -147,7 +137,6 @@ async function boot(): Promise<void> {
   state.session = session;
 
   if (!session.signedIn || !session.user) {
-    state.accountKey = null;
     state.config = null;
     state.view = { name: "login" };
     render();
@@ -168,17 +157,7 @@ async function boot(): Promise<void> {
     render();
     return;
   }
-  if (!session.user.publicKey) {
-    state.view = { name: "no-key" };
-    render();
-    return;
-  }
-  try {
-    state.accountKey = await loadAccountKey(session.user.username);
-  } catch {
-    state.accountKey = null;
-  }
-  state.view = state.accountKey ? { name: "home" } : { name: "key-setup" };
+  state.view = { name: "home" };
   render();
 }
 
@@ -196,7 +175,7 @@ function renderHeader(): void {
         on: {
           click: (event) => {
             event.preventDefault();
-            go({ name: state.session?.signedIn && state.accountKey ? "home" : "login" });
+            go({ name: state.session?.signedIn ? "home" : "login" });
           },
         },
       }, [
@@ -255,7 +234,7 @@ function noticeBar(): HTMLElement | null {
     el("button", {
       class: "link-button",
       attrs: { type: "button" },
-      text: "×",
+      text: "脳",
       on: {
         click: () => {
           state.notice = null;
@@ -270,7 +249,6 @@ async function logout(): Promise<void> {
   try {
     await api("/api/logout", { method: "POST", body: "{}" });
   } finally {
-    state.accountKey = null;
     await boot();
   }
 }
@@ -345,66 +323,6 @@ function renderConfigError(): HTMLElement {
   ]);
 }
 
-function renderNoKey(): HTMLElement {
-  return el("div", { class: "stack" }, [
-    card(tr("key.missing.title"), [
-      el("p", { class: "muted", text: tr("key.missing.body") }),
-      el("p", { class: "mono small", text: `username: ${state.session?.user?.username ?? "-"}` }),
-      el("div", { class: "actions" }, [actionButton(tr("home.signout"), () => void logout(), "secondary")]),
-    ]),
-  ]);
-}
-
-function renderKeySetup(): HTMLElement {
-  const secret = el("textarea", {
-    class: "input textarea mono",
-    attrs: { rows: 3, placeholder: "64 karakter hex", autocomplete: "off", spellcheck: "false" },
-  }) as HTMLTextAreaElement;
-
-  const submit = (): void => {
-    const user = state.session?.user;
-    if (!user || state.busy) return;
-    state.busy = "key";
-    state.keyError = null;
-    render();
-    void prepareAccountKey(secret.value)
-      .then(async (key) => {
-        if ((user.publicKey ?? "").toLowerCase() !== key.publicHex.toLowerCase()) {
-          throw new KeyImportError(tr("key.mismatch"));
-        }
-        await saveAccountKey(user.username, key);
-        state.accountKey = { ...key, username: user.username };
-        state.busy = "";
-        go({ name: "home" });
-      })
-      .catch((error: unknown) => {
-        state.busy = "";
-        state.keyError = error instanceof Error ? error.message : String(error);
-        render();
-      });
-  };
-
-  return el("div", { class: "stack" }, [
-    noticeBar(),
-    el("section", { class: "card" }, [
-      el("h1", { class: "page-title", text: tr("key.setup.title") }),
-      el("p", { class: "muted", text: tr("key.setup.body") }),
-      el("p", { class: "mono small", text: `${tr("key.account")}: ${state.session?.user?.username ?? "-"}` }),
-      el("p", { class: "mono small", text: `${tr("key.registered")}: ${state.session?.user?.publicKey ?? "-"}` }),
-      el("label", { class: "field" }, [
-        el("span", { class: "field-label", text: tr("key.setup.label") }),
-        secret,
-      ]),
-      state.keyError ? el("p", { class: "field-error", attrs: { role: "alert" }, text: state.keyError }) : null,
-      el("div", { class: "actions actions-row" }, [
-        actionButton(state.busy ? tr("common.busy") : tr("key.setup.cta"), submit, "primary"),
-        actionButton(tr("home.signout"), () => void logout(), "secondary"),
-      ]),
-      el("p", { class: "muted small", text: tr("key.setup.note") }),
-    ]),
-  ]);
-}
-
 function renderHome(): HTMLElement {
   const config = state.config;
   const session = state.session;
@@ -431,18 +349,13 @@ function renderHome(): HTMLElement {
         el("span", { text: session.user.displayName ?? session.user.username }),
       ]),
       el("div", { class: "status-row status-ok" }, [
-        el("span", { class: "status-label", text: tr("readiness.signing") }),
-        el("span", { class: "mono small", text: state.accountKey?.kid ?? "-" }),
-        el("span", { text: tr("readiness.signing.ok") }),
-      ]),
-      el("div", { class: "status-row status-ok" }, [
         el("span", { class: "status-label", text: tr("readiness.config") }),
         el("span", { text: tr("readiness.config.ok", { seq: config.bundle.seq }) }),
         el("span", {
           class: "muted small",
-          text: `${config.source} · ${tr("readiness.config.age", {
+          text: `${config.source} 路 ${tr("readiness.config.age", {
             date: new Date(config.bundle.issued).toLocaleDateString(state.locale === "id" ? "id-ID" : "en-GB"),
-          })}${bundleAgeDays(config.bundle, Date.now()) === null ? "" : ` · ${bundleAgeDays(config.bundle, Date.now())}d`}`,
+          })}${bundleAgeDays(config.bundle, Date.now()) === null ? "" : ` 路 ${bundleAgeDays(config.bundle, Date.now())}d`}`,
         }),
       ]),
       config.updateError ? el("p", { class: "muted small", text: `${tr("config.reason")}: ${config.updateError}` }) : null,
@@ -458,7 +371,7 @@ function renderHome(): HTMLElement {
               el("div", { class: "profile-meta" }, [
                 el("span", { class: "profile-title", text: localize(profile.title, state.locale) }),
                 el("span", { class: "muted small", text: tr("profile.consumer", { consumer: profile.consumer }) }),
-                el("span", { class: "muted small mono", text: `v${profile.version} · ${profile.schema_id}` }),
+                el("span", { class: "muted small mono", text: `v${profile.version} 路 ${profile.schema_id}` }),
               ]),
               actionButton(tr("readiness.start"), () => startSession(profile.id), "primary"),
             ]),
@@ -473,19 +386,7 @@ function renderHome(): HTMLElement {
         : null,
     ]),
     el("div", { class: "actions actions-stack" }, [
-      el("div", { class: "actions actions-row" }, [
-        actionButton(
-          tr("key.change"),
-          async () => {
-            if (!state.session?.user) return;
-            await clearAccountKey(state.session.user.username);
-            state.accountKey = null;
-            go({ name: "key-setup" });
-          },
-          "secondary",
-        ),
-        actionButton(tr("home.signout"), () => void logout(), "secondary"),
-      ]),
+      actionButton(tr("home.signout"), () => void logout(), "secondary"),
     ]),
   ]);
 }
@@ -606,7 +507,7 @@ function renderField(profile: Profile, field: FieldDef): HTMLElement {
           ...common,
           type: "text",
           readonly: true,
-          value: field.source === "device_kid" ? (state.accountKey?.kid ?? "") : tr("form.session.auto"),
+          value: field.source === "device_kid" ? "AITQR" : tr("form.session.auto"),
           tabindex: -1,
         },
       });
@@ -712,7 +613,7 @@ function summaryRows(profile: Profile): { label: string; value: string }[] {
     });
   }
   rows.push({ label: tr("review.profile"), value: `${profile.id} v${profile.version}` });
-  rows.push({ label: tr("review.sid.pending"), value: "—" });
+  rows.push({ label: tr("review.sid.pending"), value: "-" });
   return rows;
 }
 
@@ -763,8 +664,7 @@ function renderReview(): HTMLElement {
 async function generate(): Promise<void> {
   const draft = state.draft;
   const profile = draft ? profileOf(draft.profileId) : undefined;
-  const key = state.accountKey;
-  if (!draft || !profile || !key || !state.config || state.busy) return;
+  if (!draft || !profile || !state.config || state.busy) return;
   state.busy = "issue";
   state.notice = null;
   state.issues = [];
@@ -773,10 +673,10 @@ async function generate(): Promise<void> {
   try {
     const now = Date.now();
     const sid = newSessionId((length) => crypto.getRandomValues(new Uint8Array(length)));
-    const derived = derivedValues(profile, { sessionId: sid, deviceKid: key.kid, now });
+    const derived = derivedValues(profile, { sessionId: sid, deviceKid: "AITQR", now });
     const payload = buildPayload(profile, state.config.bundle, draft.values, derived, sid);
     const maxChars = profile.limits?.max_token_chars ?? 800;
-    const { token } = await issueToken(payload, profile.recipient.public, key, maxChars);
+    const { token } = await issueEncryptedToken(payload, profile.recipient.public, maxChars);
 
     const summary: Record<string, string> = {};
     for (const field of fieldsOf(profile)) {
@@ -789,7 +689,7 @@ async function generate(): Promise<void> {
       profileVersion: profile.version,
       issuedAt: now,
       token,
-      kidHex: key.kid,
+      kidHex: "MQ1",
       summary,
     };
     try {
@@ -828,7 +728,7 @@ function renderQr(record: IssueRecord, redisplay: boolean): HTMLElement {
         .filter((field) => record.summary[field.key])
         .slice(0, 2)
         .map((field) => `${localize(field.label, state.locale)}: ${record.summary[field.key]}`)
-        .join(" · ")
+        .join(" 路 ")
     : "";
 
   return el("div", { class: "qr-screen" }, [
@@ -840,12 +740,12 @@ function renderQr(record: IssueRecord, redisplay: boolean): HTMLElement {
     summary ? el("p", { class: "muted small", text: summary }) : null,
     el("p", {
       class: "muted small mono",
-      text: `${record.profileId} v${record.profileVersion} · ${rendered.modules}×${rendered.modules} · ${record.token.length} ${
+      text: `${record.profileId} v${record.profileVersion} 路 ${rendered.modules}脳${rendered.modules} 路 ${record.token.length} ${
         state.locale === "id" ? "karakter" : "chars"
       }`,
     }),
     el("p", { class: "muted small", text: tr("qr.brightness") }),
-    el("p", { class: "muted small", text: tr("qr.account", { kid: record.kidHex }) }),
+    el("p", { class: "muted small", text: tr("qr.encrypted") }),
     el("div", { class: "actions actions-stack" }, [
       el("div", { class: "actions actions-row" }, [
         el("button", {
@@ -901,7 +801,7 @@ async function renderHistory(): Promise<HTMLElement> {
                 el("span", { class: "mono session-code", text: record.sid }),
                 el("span", {
                   class: "muted small",
-                  text: `${new Date(record.issuedAt).toLocaleString(state.locale === "id" ? "id-ID" : "en-GB")} · ${
+                  text: `${new Date(record.issuedAt).toLocaleString(state.locale === "id" ? "id-ID" : "en-GB")} 路 ${
                     profile ? localize(profile.title, state.locale) : record.profileId
                   } v${record.profileVersion}`,
                 }),
@@ -952,12 +852,6 @@ function render(): void {
       break;
     case "config-error":
       replace(main, renderConfigError());
-      break;
-    case "no-key":
-      replace(main, renderNoKey());
-      break;
-    case "key-setup":
-      replace(main, renderKeySetup());
       break;
     case "home":
       replace(main, renderHome());

@@ -11,9 +11,9 @@ export interface ValidationIssue {
   detail?: string | number;
 }
 
-export const MQ2_PLAINTEXT_OVERHEAD = 85; // flag + kid + iat + nonce + signature
+export const MQ1_PLAINTEXT_OVERHEAD = 1; // compression flag only; no signer metadata
 export const ENVELOPE_OVERHEAD = 48; // ephemeral public key + GCM tag
-export const TOKEN_PREFIX_CHARS = 4; // "MQ2:"
+export const TOKEN_PREFIX_CHARS = 4; // "MQ1:"
 
 /** Exact base45 length for n bytes (RFC 9285 packs 2 bytes into 3 characters). */
 export function base45Length(bytes: number): number {
@@ -26,7 +26,7 @@ export function base45Length(bytes: number): number {
  */
 export function estimateTokenChars(payload: Record<string, unknown>): number {
   const bodyBytes = new TextEncoder().encode(canonicalize(payload)).length;
-  const envelope = ENVELOPE_OVERHEAD + MQ2_PLAINTEXT_OVERHEAD + bodyBytes;
+  const envelope = ENVELOPE_OVERHEAD + MQ1_PLAINTEXT_OVERHEAD + bodyBytes;
   return TOKEN_PREFIX_CHARS + base45Length(envelope);
 }
 

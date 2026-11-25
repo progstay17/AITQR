@@ -7,13 +7,13 @@ PRD dan ARCHITECTURE masih berstatus **DRAFT menunggu persetujuan pemilik**. Sna
 
 ## 2. Konvensi
 - TypeScript, mode `strict`; tanpa framework UI berat; build minimal dan deterministik (lockfile, versi pin).
-- `config`, `profile`, `payload` murni dan dapat berjalan di Node tanpa DOM/kripto platform; DOM dan WebCrypto hanya lewat adaptor.
+`config` -> `profile` -> `payload` -> `mq1` -> `qr`. `form` hanya membaca profil. `tools/` (CLI admin) tidak diimpor aplikasi. Hanya `mq1` yang menyentuh encoder Metaqr.
 - **AITQR tidak boleh mengetahui alat konsumen.** Tidak ada `if (consumer === "zyb-tool")` di kode; semua perilaku khusus alat hidup di profil (data).
 - Identifier/komentar Inggris; teks UI lewat `i18n` (Indonesia, Inggris).
 - Waktu dan RNG selalu disuntikkan agar uji deterministik.
 
 ## 3. Batas modul
-`config` → `profile` → `payload` → `mq2` → `qr`. `form` hanya membaca profil. `keys` dan `capability` hanya adaptor. `tools/` (CLI admin) tidak diimpor aplikasi. Hanya `mq2` yang menyentuh encoder Metaqr.
+`config` -> `profile` -> `payload` -> `mq1` -> `qr`. `form` hanya membaca profil. `tools/` (CLI admin) tidak diimpor aplikasi. Hanya `mq1` yang menyentuh encoder Metaqr.
 
 ## 4. Keamanan (fail-closed)
 - Kriptografi hanya dari salinan Metaqr (**tanpa modifikasi**, hash commit tercatat). Jangan menulis kripto sendiri.

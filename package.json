@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "AITQR — profile-driven MQ2 QR issuer for field staff with a self-hosted Node.js API and SQLite database.",
+  "description": "AITQR — profile-driven encrypted MQ1 QR issuer for field staff with a self-hosted Node.js API and SQLite database.",
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.backend.json",
     "pretest": "npm run build",

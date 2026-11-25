@@ -592,3 +592,33 @@ select.input {
     animation: none !important;
   }
 }
+
+
+/* Compact admin navigation: keep QR setup, accounts and audit in separate focused views. */
+.admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface, #fff);
+}
+.admin-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 16px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.admin-tab:hover { background: var(--surface-soft, #f4f6f8); color: var(--text); }
+.admin-tab.active {
+  color: var(--text);
+  background: var(--surface-soft, #eef3f8);
+  border-color: var(--line);
+}
+.admin-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

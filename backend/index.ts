@@ -2,20 +2,16 @@
  * AITQR HTTP application handler. It uses the Fetch API request/response model and is hosted by the
  * Node.js server in scripts/serve.mjs, with persistent SQLite storage.
  *
- * Accounts are created by an administrator: username, password and the account's **public** signing key.
- * AITQR never generates account keys and never holds a private key; the staff member imports their own
- * key in the browser (non-extractable) and signs the QR there. The server handles login, configuration,
- * account management and token verification only.
+ * Accounts use username/password only. QR payloads are encrypted to the decoder public key (MQ1);
+ * no per-user signing keys, decoder secrets, or allow-list are stored by AITQR.
  */
 import { signBundle as signWithKey } from "../src/config/sign.js";
 import { assertBundleShape } from "../src/config/verify.js";
 import { validateProfile } from "../src/profile.js";
-import { openToken, verifySignature } from "../src/verify-token.js";
-import { bytesToHex, hexToBytes, kidOf } from "../vendor/metaqr/src/index.js";
+import { bytesToHex, kidOf } from "../vendor/metaqr/src/index.js";
 import {
   createSessionToken,
   hashPassword,
-  isHex64,
   isSessionSecret,
   isValidUsername,
   normaliseUsername,
@@ -60,8 +56,6 @@ interface UserRow {
   display_name: string | null;
   role: string;
   password_hash: string;
-  public_key: string | null;
-  kid: string | null;
   status: string;
   failed: number;
   locked_until: number | null;
@@ -127,6 +121,9 @@ async function ensureSchema(env: Env): Promise<void> {
   if (!schemaReady) {
     schemaReady = (async () => {
       for (const statement of SCHEMA) await env.DB.prepare(statement).run();
+      // Retire legacy MQ2 settings and per-staff signing keys; AITQR now issues encrypted-only MQ1.
+      await env.DB.prepare("DELETE FROM settings WHERE key = 'decoder_secret'").run();
+      await env.DB.prepare("UPDATE users SET public_key = NULL, kid = NULL WHERE public_key IS NOT NULL OR kid IS NOT NULL").run();
       const draft = await env.DB.prepare("SELECT id FROM bundle_draft WHERE id = 1").first();
       if (!draft) {
         const seed = defaultSigned as unknown as SignedBundle;
@@ -296,9 +293,6 @@ export function validateSource(source: unknown): { bundle: Bundle } | { problems
 
 
 
-async function kidFor(publicHex: string): Promise<string> {
-  return bytesToHex(await kidOf(new Uint8Array(hexToBytes(publicHex))));
-}
 
 function publicUser(user: UserRow): Record<string, unknown> {
   return {
@@ -306,8 +300,6 @@ function publicUser(user: UserRow): Record<string, unknown> {
     username: user.username,
     displayName: user.display_name,
     role: user.role,
-    publicKey: user.public_key,
-    kid: user.kid,
     status: user.status,
     createdAt: user.created_at,
     lastSeenAt: user.last_seen_at,
@@ -341,9 +333,6 @@ export default {
         const published = await env.DB.prepare("SELECT seq FROM bundle_versions ORDER BY seq DESC LIMIT 1").first<{
           seq: number;
         }>();
-        const decoder = await env.DB.prepare("SELECT value FROM settings WHERE key = 'decoder_secret'").first<{
-          value: string;
-        }>();
         const counts = await env.DB.prepare(
           "SELECT (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins, (SELECT COUNT(*) FROM users) AS users",
         ).first<{ admins: number; users: number }>();
@@ -362,7 +351,6 @@ export default {
           configured: {
             adminKey: /^[0-9a-fA-F]{64}$/.test(adminSeed),
             sessionKey: /^[0-9a-fA-F]{64}$/.test(env.AITQR_SESSION_KEY?.trim() ?? ""),
-            decoderSecret: Boolean(decoder?.value),
           },
           adminKid,
           admins: Number(counts?.admins ?? 0),
@@ -514,7 +502,7 @@ export default {
           "SELECT seq, created_at, created_by, note FROM bundle_versions ORDER BY seq DESC LIMIT 1",
         ).first<{ seq: number; created_at: number; created_by: string | null; note: string | null }>();
         const users = await env.DB.prepare(
-          "SELECT id, username, display_name, role, public_key, kid, status, created_at, last_seen_at FROM users ORDER BY created_at",
+          "SELECT id, username, display_name, role, status, created_at, last_seen_at FROM users ORDER BY created_at",
         ).all<Omit<UserRow, "password_hash" | "failed" | "locked_until">>();
         const accountConfigs = await env.DB.prepare(
           "SELECT c.user_id, c.draft_source, c.draft_updated_at, c.draft_updated_by, c.published_at, c.published_seq " +
@@ -533,9 +521,6 @@ export default {
           action: string;
           detail: string | null;
         }>();
-        const decoder = await env.DB.prepare("SELECT value FROM settings WHERE key = 'decoder_secret'").first<{
-          value: string;
-        }>();
         return json({
           user: publicUser(user),
           draft: draft ? { source: draft.source, updatedAt: draft.updated_at, updatedBy: draft.updated_by } : null,
@@ -545,8 +530,6 @@ export default {
             username: row.username,
             displayName: row.display_name,
             role: row.role,
-            publicKey: row.public_key,
-            kid: row.kid,
             status: row.status,
             createdAt: row.created_at,
             lastSeenAt: row.last_seen_at,
@@ -560,10 +543,6 @@ export default {
             publishedSeq: row.published_seq,
           })),
           audit: audit.results,
-          keys: {
-            adminKeyConfigured: /^[0-9a-fA-F]{64}$/.test(env.AITQR_ADMIN_KEY?.trim() ?? ""),
-            decoderSecretConfigured: Boolean(decoder?.value),
-          },
         });
       }
 
@@ -577,11 +556,9 @@ export default {
           const username = normaliseUsername(String(body?.username ?? ""));
           const password = String(body?.password ?? "");
           const role = body?.role === "admin" ? "admin" : "staff";
-          const publicKey = String(body?.publicKey ?? "").trim().toLowerCase();
           const displayName = String(body?.displayName ?? "").trim() || username;
           if (!isValidUsername(username)) return fail("Username 3-32 karakter: huruf kecil, angka, titik, garis bawah, strip.");
           if (password.length < 8) return fail("Kata sandi minimal 8 karakter.");
-          if (publicKey !== "" && !isHex64(publicKey)) return fail("Public key harus 64 karakter hex (Ed25519).");
           if (await findUser(env, username)) return fail("Username sudah dipakai.", 409);
           const id = crypto.randomUUID();
           await env.DB.prepare(
@@ -593,8 +570,8 @@ export default {
               displayName,
               role,
               await hashPassword(password, pbkdf2Iterations(env.AITQR_PBKDF2_ITERATIONS)),
-              publicKey || null,
-              publicKey ? await kidFor(publicKey) : null,
+              null,
+              null,
               now,
             )
             .run();
@@ -607,18 +584,9 @@ export default {
         if (!target) return fail("Akun tidak ditemukan.", 404);
 
         if (action === "update") {
-          const publicKeyRaw = body?.publicKey;
           const role = body?.role === "admin" ? "admin" : body?.role === "staff" ? "staff" : target.role;
           const status = body?.status === "active" || body?.status === "disabled" ? body.status : target.status;
           const displayName = String(body?.displayName ?? target.display_name ?? "").trim() || target.username;
-          let publicKey = target.public_key;
-          let kid = target.kid;
-          if (typeof publicKeyRaw === "string") {
-            const candidate = publicKeyRaw.trim().toLowerCase();
-            if (candidate !== "" && !isHex64(candidate)) return fail("Public key harus 64 karakter hex (Ed25519).");
-            publicKey = candidate || null;
-            kid = candidate ? await kidFor(candidate) : null;
-          }
           if (target.role === "admin" && role === "staff" && (await adminCount(env)) <= 1) {
             return fail("Minimal satu administrator harus tersisa.", 409);
           }
@@ -626,9 +594,9 @@ export default {
             return fail("Minimal satu administrator aktif harus tersisa.", 409);
           }
           await env.DB.prepare(
-            "UPDATE users SET display_name = ?, role = ?, status = ?, public_key = ?, kid = ? WHERE id = ?",
+            "UPDATE users SET display_name = ?, role = ?, status = ? WHERE id = ?",
           )
-            .bind(displayName, role, status, publicKey, kid, target.id)
+            .bind(displayName, role, status, target.id)
             .run();
           await log(env, user.username, "user.update", `${target.username} role=${role} status=${status}`);
           return json({ ok: true });
@@ -787,88 +755,6 @@ export default {
           .run();
         await log(env, user.username, "bundle.publish", `seq=${nextSeq} kid=${signed.sig.kid}`);
         return json({ ok: true, seq: nextSeq, kid: signed.sig.kid });
-      }
-
-      if (path === "/api/admin/keys") {
-        if (req.method === "GET") {
-          const decoder = await env.DB.prepare("SELECT value FROM settings WHERE key = 'decoder_secret'").first<{
-            value: string;
-          }>();
-          return json({ decoderSecretConfigured: Boolean(decoder?.value) });
-        }
-        if (req.method !== "POST") return fail("Method not allowed", 405);
-        const body = (await req.json().catch(() => null)) as { decoderSecret?: string } | null;
-        const secret = (body?.decoderSecret ?? "").trim().toLowerCase();
-        if (secret !== "" && !/^[0-9a-f]{64}$/.test(secret)) {
-          return fail("Kunci rahasia decoder harus 64 karakter hex (X25519).");
-        }
-        if (secret === "") {
-          await env.DB.prepare("DELETE FROM settings WHERE key = 'decoder_secret'").run();
-          await log(env, user.username, "keys.decoder.clear", "");
-          return json({ ok: true, decoderSecretConfigured: false });
-        }
-        await env.DB.prepare(
-          "INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('decoder_secret', ?, ?, ?) " +
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-        )
-          .bind(secret, Date.now(), user.username)
-          .run();
-        await log(env, user.username, "keys.decoder.set", "decoder secret stored");
-        return json({ ok: true, decoderSecretConfigured: true });
-      }
-
-      if (path === "/api/admin/verify") {
-        if (req.method !== "POST") return fail("Method not allowed", 405);
-        const body = (await req.json().catch(() => null)) as { token?: string } | null;
-        const token = (body?.token ?? "").trim();
-        if (!token) return fail("Body must be { token }");
-        const decoder = await env.DB.prepare("SELECT value FROM settings WHERE key = 'decoder_secret'").first<{
-          value: string;
-        }>();
-        if (!decoder?.value) return fail("Atur kunci rahasia decoder terlebih dahulu.", 409);
-        try {
-          const opened = await openToken(token, decoder.value);
-          const account = await env.DB.prepare("SELECT username, public_key, display_name, status FROM users WHERE kid = ?")
-            .bind(opened.kid)
-            .first<{ username: string; public_key: string | null; display_name: string | null; status: string }>();
-          if (!account?.public_key) return json({ ok: false, code: "unknown-account", kid: opened.kid });
-          const valid = await verifySignature(opened, account.public_key);
-          return json({
-            ok: valid,
-            code: valid ? null : "bad-signature",
-            kid: opened.kid,
-            account: { username: account.username, label: account.display_name, status: account.status },
-            issuedAt: opened.issuedAt,
-            compressed: opened.compressed,
-            metadata: opened.metadata,
-          });
-        } catch (error) {
-          return json({ ok: false, code: "unreadable", error: error instanceof Error ? error.message : "failed" });
-        }
-      }
-
-      if (path === "/api/admin/allowlist") {
-        const users = await env.DB.prepare(
-          "SELECT username, public_key, display_name, status FROM users WHERE public_key IS NOT NULL ORDER BY created_at",
-        ).all<{ username: string; public_key: string; display_name: string | null; status: string }>();
-        const allowlist = {
-          format: "metaqr-allowlist",
-          version: 1,
-          devices: users.results.map((row) => ({
-            id: row.username,
-            public_key: row.public_key,
-            ...(row.display_name ? { label: row.display_name } : {}),
-            status: row.status === "active" ? "active" : "revoked",
-          })),
-        };
-        await log(env, user.username, "allowlist.export", `users=${users.results.length}`);
-        return new Response(JSON.stringify(allowlist, null, 2), {
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            "Content-Disposition": 'attachment; filename="allowlist.json"',
-            "Cache-Control": "private, no-store",
-          },
-        });
       }
 
       return fail("Not found", 404);

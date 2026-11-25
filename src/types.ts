@@ -49,7 +49,7 @@ export interface Profile {
   version: number;
   title: Localized;
   consumer: string;
-  recipient: { kid: string; public: string };
+  recipient: { kid?: string; public: string };
   schema_id: string;
   fields: FieldDef[];
   /** Automatic values the operator can never edit (PRD §5 `derived`). */
@@ -60,7 +60,6 @@ export interface Profile {
 
 export interface GlobalConfig {
   default_locale: "id" | "en";
-  require_persisted_key: boolean;
   qr: { ecc: "L" | "M" | "Q" | "H"; quiet_modules: number };
   allowed_profiles?: string[];
 }

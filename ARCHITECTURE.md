@@ -5,15 +5,15 @@ Pasangan dokumen: `PRD.md`, `AGENTS.md`. Konsumen pertama: `ZYBTool/ARCHITECTURE
 
 ## 1. Arsitektur yang direkomendasikan
 
-**PWA mobile-first + Node.js HTTP API + SQLite**. Form, payload, tanda tangan QR petugas, dan render QR berjalan di browser HP; kunci Ed25519 akun tetap non-extractable di perangkat. API server menangani login, administrasi akun, penyimpanan konfigurasi per akun, signing bundle admin, dan verifikasi token. SQLite menyimpan akun/konfigurasi/audit/kunci decoder, bukan riwayat operasional petugas.
+**PWA mobile-first + Node.js HTTP API + SQLite**. Form, payload, enkripsi MQ1, dan render QR berjalan di browser HP. Tidak ada signing key per petugas. API server menangani login, administrasi akun, penyimpanan konfigurasi per akun, dan signing bundle admin. SQLite menyimpan akun/konfigurasi/audit, bukan private key decoder.
 
 Dasar teknis, dari pembacaan repo Metaqr (`js/`, v0.4.0) [F]:
-- Encoder JS tanpa dependensi: `encode(metadata, publicKey, {signer, compress, maxChars})` → string token (`MQ2:` bila ada `signer`). Pembuatan gambar QR **tidak** termasuk; AITQR harus menyediakan renderer QR sendiri.
-- Kunci perangkat: `loadOrCreateDeviceSigner()` (Ed25519, **non-extractable**, di IndexedDB); mengembalikan `persisted`/`storageError`. JS halaman dapat menandatangani tetapi tidak dapat mengekspor kunci.
-- Syarat runtime: WebCrypto Ed25519, X25519, HKDF, AES-GCM, `CompressionStream("deflate-raw")`, IndexedDB, secure context. Backend X25519 dapat disuntikkan (mis. `@noble/curves`); untuk Ed25519 tidak ada hook serupa.
-- Batas token: default 800 karakter, **disarankan ≤ 400** (QR lebih kecil, lebih mudah dibaca). Token bertanda tangan ±126 karakter lebih panjang; contoh README: QR 65×65 modul vs 53×53 tanpa tanda tangan.
-- Diuji di Node 22 dan Chromium 157; Safari/Firefox/Chrome terkini "seharusnya" mendukung, **uji di HP target** [?].
-- Ada skrip `browser-check.cjs` (Playwright) dan vektor uji lintas-bahasa yang dapat dipakai ulang.
+- Encoder JS `encode(metadata, recipientPublic, {compress, maxChars})` menghasilkan token MQ1 terenkripsi. Tanpa signer, tanpa tanda tangan QR.
+- Penerbitan QR membutuhkan WebCrypto X25519, HKDF, AES-GCM, dan `CompressionStream("deflate-raw")` bila kompresi tersedia. Tidak membutuhkan IndexedDB atau Ed25519 per petugas.
+- Verifikasi bundle konfigurasi admin tetap menggunakan Ed25519; itu terpisah dari QR operasional.
+- Batas token: default 800 karakter, disarankan ? 400 agar QR lebih mudah dibaca.
+- QR renderer `qrcodegen` di-vendor; Metaqr sendiri tidak menghasilkan gambar QR.
+- Uji dilakukan di Node 22 dan Chromium 157; **uji di HP target** tetap diperlukan [?].
 
 Pilihan implementasi [A, lihat PRD §12]: TypeScript tanpa framework UI berat, build minimal dan deterministik (lockfile), semua dependensi di-vendor dan di-pin.
 
@@ -25,14 +25,12 @@ Pilihan implementasi [A, lihat PRD §12]: TypeScript tanpa framework UI berat, b
 | `profile` | Validasi profil terhadap skema `aitqr.profile/1`, resolusi daftar pilihan, aturan field. | Ya |
 | `form` | Render form dari profil (satu renderer per tipe field); tanpa logika alat tertentu. | UI |
 | `payload` | Pemetaan field → payload ringkas, kanonisasi, hitung anggaran karakter. | Ya |
-| `mq2` | Adaptor tipis ke encoder Metaqr (salinan tak dimodifikasi, commit tercatat). | Adaptor |
-| `keys` | Siklus hidup kunci perangkat, kode pendaftaran, deteksi kunci hilang. | Adaptor |
-| `capability` | Deteksi fitur + swa-uji kripto saat mulai. | Adaptor |
+| `mq1` | Adaptor tipis ke encoder Metaqr untuk encrypted-only MQ1. | Adaptor |
 | `qr` | Renderer QR (pustaka di-vendor) dan tampilan layar penuh. | UI |
 | `history` | Riwayat penerbitan lokal (IndexedDB). | Adaptor |
 | `pwa` | Service worker, cache berversi, alur pembaruan. | Platform |
 | `i18n` | Bahasa Indonesia/Inggris. | Ya |
-| `tools/` (Node, terpisah) | CLI admin: `lint-profile`, `budget`, `sign-bundle`, `make-vectors`, `registration-to-allowlist`. | CLI |
+| `tools/` (Node, terpisah) | CLI admin: `lint-profile`, `budget`, `sign-bundle`, `make-vectors`, (tidak ada registrasi/allow-list QR). | CLI |
 
 Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; semua dapat diuji di Node tanpa browser.
 
@@ -42,8 +40,7 @@ Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; 
 {
   "bundle": {
     "schema": "aitqr.bundle/1", "seq": 12, "issued": "2026-11-25T00:00:00Z", "max_age_days": null,
-    "global": { "default_locale": "id", "require_persisted_key": true,
-                "qr": { "ecc": "M", "quiet_modules": 4 } },
+    "global": { "default_locale": "id", "qr": { "ecc": "M", "quiet_modules": 4 } },
     "lists": { "locations": ["…"], "activities": ["…"], "shifts": [1, 2, 3] },
     "profiles": [ { "id": "zyb-recording", "version": 1, "…": "lihat PRD §5" } ]
   },
@@ -64,7 +61,7 @@ Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; 
 |---|---|
 | `id`, `version` | Identitas profil; perubahan skema = versi baru (BR-07 PRD). |
 | `consumer`, `schema_id` | Alat dan skema payload yang dimiliki alat tersebut. |
-| `recipient` | `{kid, public}` decoder. Satu penerima per profil. |
+| `recipient` | `{public}` decoder X25519. Satu penerima per profil; `kid` lama diabaikan. |
 | `fields[]` | `key`, `type` (`text`/`select`/`number`/`datetime`/`device_id`/`checkbox`/`constant`/`computed`), `label` (per bahasa), `required`, `max`, `pattern`, `list`, `short` (kunci ringkas di payload). |
 | `derived[]` | Nilai otomatis: `session_id`, `device_clock`, `device_kid`, `profile`. Tidak dapat diubah operator. |
 | `limits` | `max_token_chars` (default 800), `target_token_chars` (default 400). |
@@ -79,7 +76,7 @@ Tabel SQLite `account_configs` memiliki satu baris per `users.id`: `draft_source
 - `PUT /api/admin/account-config` hanya menyimpan draf akun yang dipilih. `POST /api/admin/account-config/publish` memvalidasi bundle, menaikkan sequence milik akun itu, menandatangani bundle dengan `AITQR_ADMIN_KEY`, dan memakai compare-and-swap agar dua publikasi bersamaan tidak saling menimpa.
 - `GET /api/account/config` mengambil ID akun dari sesi server yang sudah diverifikasi; klien tidak dapat meminta konfigurasi akun lain dengan mengganti parameter.
 - Browser memverifikasi signature dan menyimpan cache offline dengan key yang mengandung ID akun. Service worker melewatkan seluruh `/api/*` secara network-only; Cache API bersama tidak pernah menyimpan respons yang terikat cookie.
-- `settings.decoder_secret` tetap merupakan secret platform yang hanya digunakan API server untuk verifikasi token decoder; field/profil/penerima tetap ada pada konfigurasi per akun.
+- Public key X25519 decoder berada pada konfigurasi profil per akun; private key decoder tidak pernah masuk AITQR.
 
 ## 4. Aliran data
 
@@ -88,11 +85,10 @@ sequenceDiagram
   participant SW as Service worker
   participant W as API server + SQLite
   participant C as config
-  participant K as keys
-  participant CAP as capability
+    participant CAP as capability
   actor Op as Petugas
   participant P as profile/payload
-  participant M as mq2 (Metaqr)
+  participant M as mq1 (Metaqr)
   participant Q as qr
   Op->>W: login /api/login
   W-->>Op: sesi akun terautentikasi
@@ -101,14 +97,13 @@ sequenceDiagram
   W-->>SW: bundle akun bertanda tangan, private no-store
   SW-->>C: respons jaringan (API tidak masuk Cache API bersama)
   C->>C: verifikasi tanda tangan + seq per akun / cache lokal bernamespace akun
-  CAP->>CAP: uji Ed25519, X25519, deflate-raw, IndexedDB
+  CAP->>CAP: uji X25519, HKDF, AES-GCM, deflate-raw
   CAP-->>Op: lulus / blokir dengan alasan
-  K->>K: loadOrCreateDeviceSigner
   Op->>P: pilih profil, isi form
   P->>P: validasi + derived (sid, waktu) + payload ringkas
   P->>P: cek anggaran karakter
-  P->>M: encode(payload, recipient, signer)
-  M-->>Q: token MQ2
+  P->>M: encode(payload, recipient)
+  M-->>Q: token MQ1 terenkripsi
   Q-->>Op: QR layar penuh + teks sid/waktu
   P->>P: simpan riwayat lokal
 ```
@@ -121,30 +116,31 @@ sequenceDiagram
   "l": "<lokasi>", "a": "<aktivitas>", "sh": 2, "b": "MM3201" }
 ```
 
-`iat` dan `kid` sudah berada di dalam token MQ2 (bagian yang ditandatangani) dan tidak diduplikasi di payload. Estimasi panjang token ±300–400 karakter [?] harus diukur dengan field nyata.
+MQ1 tidak membawa signer `kid` atau signature; payload hanya dienkripsi ke public key decoder. Estimasi panjang token ±300–400 karakter [?] harus diukur dengan field nyata.
 
 `session_id`: 80 bit acak (`crypto.getRandomValues`) dalam base32 Crockford 16 karakter [A]; unik secara praktis tanpa koordinasi server. Jam dan RNG disuntikkan agar uji deterministik.
 
-## 5. Kunci dan kepercayaan
+## 5. Kunci dan batas kepercayaan
 
 | Elemen | Aturan |
 |---|---|
-| Kunci perangkat | Dibuat saat pertama dipakai, non-extractable, disimpan IndexedDB (Metaqr `device.js`). `persisted=false` → blokir penerbitan bila `require_persisted_key` (default true). |
-| Pendaftaran | UI menampilkan `kid`/kunci publik dan kode pendaftaran `{v,kid,pub,label,created}`. Admin mendaftarkan ke allowlist (`metaqr allowlist add allowlist.json --id <id> --pub <publicHex>` [F]); `tools/registration-to-allowlist` menghasilkan perintahnya. |
-| Kunci hilang | Riwayat menyimpan `kid` terakhir; `created=true` padahal riwayat ada → peringatan keras + alur daftar ulang. Data situs dihapus atau di-evict (terutama iOS) [F README] menyebabkan ini. |
-| Kunci decoder | Hanya kunci **publik** di profil; privat tidak pernah di AITQR. |
-| Kunci admin bundel | Privat di luar repo dan di luar pipeline deploy; publik tertanam. |
+| Public key decoder | Disimpan pada profil akun AITQR. Admin menempelkan public key X25519 dari ZYBTool. |
+| Private key decoder | Hanya berada di ZYBTool dan dilindungi Windows DPAPI. AITQR tidak pernah menerima private key. |
+| Kunci petugas | Tidak ada. Akun petugas hanya username/kata sandi; tidak ada keypair Ed25519, pairing, atau allow-list. |
+| Kunci admin bundle | Private key Ed25519 tetap dipakai server untuk menandatangani bundle konfigurasi; public key tertanam di aplikasi. Ini bukan tanda tangan QR. |
+| Batas MQ1 | MQ1 memberi kerahasiaan dan integritas enkripsi, tetapi tidak mengautentikasi siapa pembuat QR dan tidak menyediakan replay protection. |
 
-Batas: kunci HP membuktikan **perangkat**, bukan orang; JS halaman yang berjalan (mis. XSS) dapat menandatangani selama halaman terbuka walau tidak dapat mengekspor kunci [F, komentar `device.js`].
+Siapa pun yang mengetahui public key decoder dapat membuat QR MQ1 yang dapat didekripsi oleh private key pasangan. Jangan menampilkan `QR_DECRYPTED` sebagai bukti identitas petugas.
 
 ## 6. Deteksi kapabilitas dan kegagalan
 
-Saat mulai dan sebelum penerbitan pertama:
-1. `isSecureContext`, `crypto.subtle`.
-2. Swa-uji: generate/sign Ed25519; X25519 `deriveBits`; HKDF; AES-GCM; `compressionAvailable()`; buka IndexedDB.
-3. Round-trip lokal: `encode` ke kunci uji sekali pakai lalu `decode`.
+Sebelum penerbitan QR:
+1. Pastikan `isSecureContext` dan `crypto.subtle` tersedia.
+2. Uji X25519 key agreement, HKDF-SHA-256, AES-GCM, serta kompresi `deflate-raw` bila tersedia.
+3. Jika X25519/AES-GCM tidak didukung, blokir penerbitan dengan pesan yang menyebut browser/runtime; tidak ada fallback kriptografi buatan sendiri.
+4. Jika public key decoder salah format, tolak konfigurasi saat admin menyimpan/mempublikasikan profil.
 
-Gagal → layar blokir menyebut kapabilitas yang kurang dan versi browser; **tidak ada QR dan tidak ada penurunan ke token tanpa tanda tangan** (BR-06 PRD). Opsi fallback (X25519 via backend tersuntik) dapat dipasang bila perlu [F hook ada]; fallback **Ed25519** menuntut kunci perangkat berbasis seed yang dapat diekstrak (`signerFromSeed` [F ada]) sehingga lebih lemah → hanya bila diputuskan eksplisit dan diberi label di token/profil [?]. Alternatif backend signing tidak direkomendasikan (melemahkan bukti perangkat).
+Ed25519 tetap diperlukan untuk memverifikasi bundle konfigurasi admin yang ditandatangani server. Ed25519 tidak dipakai untuk QR petugas.
 
 ## 7. Tampilan QR
 
@@ -185,7 +181,7 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 | Bundel konfigurasi palsu (alihkan penerima) | Tanda tangan admin, kunci tepercaya tertanam, `seq` anti-rollback | Kunci admin bocor |
 | XSS | CSP ketat, tanpa pihak ketiga, tanpa inline script, dependensi di-vendor | XSS tetap dapat menandatangani selama halaman terbuka |
 | Rantai pasok | Lockfile, versi pin, salinan Metaqr tanpa modifikasi dengan hash commit, audit dependensi di CI | Kompromi upstream |
-| Kunci perangkat dicuri | Non-extractable; revoke `kid` di allowlist | Token sah antara pencurian dan revoke |
+| Kunci perangkat dicuri | Tidak ada signing key petugas; hanya private key decoder di ZYBTool | Token sah antara pencurian dan revoke |
 | Situs tiruan (phishing) | Kunci tiruan tidak terdaftar → `UNKNOWN_DEVICE` di ZYB Tool | Operator tertipu menampilkan QR palsu |
 | QR difoto/disalin | Terenkripsi ke decoder; replay ditangani konsumen | Replay oleh pemegang HP sah |
 | Operator salah isi `device_id` | Pola `device_id`, layar konfirmasi; ZYB Tool memeriksa C1 | Salah isi yang cocok dengan kamera lain |
@@ -201,9 +197,9 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 - **Environment:** APP_ORIGIN, AITQR_SESSION_KEY, AITQR_ADMIN_KEY, AITQR_SETUP_CODE, AITQR_PBKDF2_ITERATIONS, AITQR_DATA_DIR, HOST, dan PORT. Secret dibaca dari environment/systemd EnvironmentFile dan tidak masuk repo.
 - **Service:** systemd menjalankan node scripts/serve.mjs, restart saat gagal, dan bind hanya ke loopback; Caddy meneruskan HTTPS.
 - **Build:** npm run build menghasilkan PWA di dist/ dan backend bundle server/app.js di luar direktori static assets.
-- **Signing bundle:** API menandatangani bundle akun ketika dipublikasikan dengan AITQR_ADMIN_KEY; public key pasangannya tertanam di src/config/trustedAdminKeys.ts. Private key akun petugas tetap di perangkat.
+- **Signing bundle:** API menandatangani bundle akun ketika dipublikasikan dengan AITQR_ADMIN_KEY; public key pasangannya tertanam di src/config/trustedAdminKeys.ts. Tidak ada private key QR per petugas.
 - **Pemisahan tugas:** rilis kode aplikasi terpisah dari perubahan field akun. Administrator menyimpan lalu menerbitkan hanya akun terpilih; petugas mendapat bundle baru saat memuat ulang konfigurasi.
-- **Pendaftaran perangkat:** administrator mencatat public key akun dan memperbarui allowlist konsumen sesuai proses alat.
+- **Pendaftaran perangkat:** administrator mencatat public key decoder X25519 di profil AITQR.
 ## 12. Pengujian
 
 - **Unit (Node):** validator profil, pemetaan payload, anggaran karakter, kanonisasi JCS, verifikasi bundel dengan kunci uji, anti-rollback.
@@ -232,3 +228,8 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 - Pustaka renderer QR yang dipilih (lisensi, ukuran, audit).
 - Kebijakan hosting (akses terbatas) dan pemilik kunci admin bundel.
 - Bentuk final skema `zyb-recording/v1` (dimiliki ZYB Tool).
+
+
+## Keputusan protokol 2026-11-25
+
+QR operasional memakai Metaqr MQ1 encrypted-only. AITQR tidak membuat kunci Ed25519 per petugas dan tidak menyediakan endpoint allow-list/decoder-secret. Public key X25519 decoder disimpan dalam profil per akun; private key hanya berada di ZYBTool. MQ1 tidak mengautentikasi pembuat QR dan tidak menyediakan replay protection. Ed25519 tetap dipakai hanya untuk menandatangani bundle konfigurasi admin.
