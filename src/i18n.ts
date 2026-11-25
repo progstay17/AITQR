@@ -10,10 +10,15 @@ const DICT: Record<string, Entry> = {
   "status.offline": ["Offline — memakai konfigurasi tersimpan", "Offline — using saved configuration"],
   "status.checking": ["Memeriksa akun dan konfigurasi…", "Checking account and configuration…"],
 
+  "session.unavailable.title": ["Tidak dapat memeriksa sesi", "Unable to verify your session"],
+  "session.unavailable.body": [
+    "AITQR perlu terhubung ke server untuk memeriksa sesi login. Sambungkan perangkat lalu coba lagi. Untuk penggunaan offline, muat aplikasi dan masuk saat online terlebih dahulu; jangan tutup atau muat ulang tab selama sesi offline.",
+    "AITQR must reach the server to verify your login session. Reconnect and try again. For offline use, load the app and sign in while online first; do not close or reload this tab during the offline session.",
+  ],
   "login.title": ["Masuk untuk menerbitkan QR", "Sign in to issue QR"],
   "login.body": [
-    "Masuk dengan akun yang dibuat administrator. Kunci privat akun cukup ditempel sekali di browser ini; kunci itu tidak dikirim ke server.",
-    "Sign in with the account your administrator created. Paste the account's private key once in this browser; it is never sent to the server.",
+    "Masuk dengan username dan kata sandi yang dibuat administrator. Setelah sesi dan konfigurasi dimuat, AITQR dapat melanjutkan penerbitan selama tab tetap terbuka meskipun koneksi terputus.",
+    "Sign in with the username and password created by your administrator. Once the session and configuration are loaded, AITQR can continue issuing while this tab remains open even if the connection drops.",
   ],
   "login.cta": ["Masuk", "Sign in"],
   "login.hint": ["Akun dibuat oleh administrator. Lupa kata sandi? Minta admin mengatur ulang.", "Accounts are created by an administrator. Forgot your password? Ask an admin to reset it."],
@@ -23,19 +28,19 @@ const DICT: Record<string, Entry> = {
 
   "key.missing.title": ["Akun belum punya public key", "This account has no public key"],
   "key.missing.body": [
-    "Administrator harus mengisi public key akun ini sebelum QR bisa diterbitkan.",
-    "An administrator must add this account's public key before QR codes can be issued.",
+    "Administrator harus mengisi public key decoder pada profil yang akan digunakan.",
+    "An administrator must add the decoder public key to the selected profile before QR codes can be issued.",
   ],
   "key.setup.title": ["Aktifkan kunci akun", "Activate the account key"],
   "key.setup.body": [
-    "Tempel kunci privat Ed25519 akun Anda (64 karakter hex). Kunci diimpor sebagai non-extractable dan disimpan hanya di browser ini.",
-    "Paste your account's Ed25519 private key (64 hex characters). It is imported as non-extractable and stored only in this browser.",
+    "AITQR tidak meminta atau menyimpan private key petugas. Masuk menggunakan username dan kata sandi.",
+    "AITQR does not request or store staff private keys. Sign in with your username and password.",
   ],
-  "key.setup.label": ["Kunci privat", "Private key"],
-  "key.setup.cta": ["Simpan kunci", "Save key"],
+  "key.setup.label": ["Tidak diperlukan", "Not required"],
+  "key.setup.cta": ["Tidak diperlukan", "Not required"],
   "key.setup.note": [
-    "AITQR tidak pernah membuat kunci. Public key akun ini sudah didaftarkan administrator; kunci privat tidak dikirim ke server.",
-    "AITQR never generates keys. This account's public key is already registered by the administrator; the private key is not sent to the server.",
+    "AITQR hanya menggunakan public key decoder yang dikonfigurasi administrator. Private key decoder tetap berada pada aplikasi penerima.",
+    "AITQR only uses the decoder public key configured by an administrator. The decoder private key remains in the receiving application.",
   ],
   "key.account": ["Akun", "Account"],
   "key.registered": ["Public key terdaftar", "Registered public key"],
@@ -51,21 +56,21 @@ const DICT: Record<string, Entry> = {
   "home.reload": ["Muat ulang", "Reload"],
 
   "readiness.account": ["Akun", "Account"],
-  "readiness.signing": ["Kunci tanda tangan akun", "Account signing key"],
-  "readiness.signing.ok": ["dipakai untuk semua QR", "used for every QR"],
+  "readiness.signing": ["Signature konfigurasi admin", "Admin configuration signature"],
+  "readiness.signing.ok": ["diverifikasi sebelum konfigurasi dipakai", "verified before the configuration is used"],
 
   "form.check": ["Periksa kembali data yang ditandai.", "Check the highlighted fields."],
-  "form.session.hint": ["ID sesi dibuat otomatis di server saat QR diterbitkan.", "The session ID is created on the server when the QR is issued."],
+  "form.session.hint": ["ID sesi dibuat otomatis di perangkat saat QR dibuat.", "The session ID is generated automatically on this device when the QR is created."],
   "form.session.auto": ["Otomatis", "Automatic"],
 
   "review.sid.pending": ["ID sesi", "Session ID"],
-  "review.account.signed": ["QR akan ditandatangani akun {name} di server.", "The QR is signed by the account {name} on the server."],
+  "review.recipient": ["QR akan dienkripsi untuk decoder {name}. QR tidak membuktikan identitas pembuatnya.", "The QR will be encrypted for decoder {name}. It does not authenticate who created it."],
   "error.budget": [
     "Token melebihi {limit} karakter. Persingkat {field} lalu coba lagi.",
     "The token exceeds {limit} characters. Shorten {field} and try again.",
   ],
 
-  "qr.account": ["Ditandatangani akun · kid {kid}", "Signed by account · kid {kid}"],
+  "qr.account": ["Dienkripsi untuk decoder · format {kid}", "Encrypted for decoder · format {kid}"],
   "history.save.failed": ["QR dibuat, tetapi riwayat tidak dapat disimpan di perangkat ini.", "The QR was created, but history could not be saved on this device."],
 
   "readiness.title": ["Status kesiapan", "Readiness"],
@@ -94,6 +99,7 @@ const DICT: Record<string, Entry> = {
   "form.required": ["wajib", "required"],
   "form.optional": ["opsional", "optional"],
   "form.select": ["Pilih…", "Select…"],
+  "form.search": ["Ketik untuk mencari opsi…", "Type to search options…"],
   "form.review": ["Periksa data sesi", "Review session details"],
   "form.back": ["Kembali", "Back"],
   "form.session": ["ID sesi (otomatis)", "Session ID (automatic)"],
@@ -127,11 +133,13 @@ const DICT: Record<string, Entry> = {
   "qr.profile": ["Profil", "Profile"],
   "qr.recorder": ["Petugas", "Operator"],
   "qr.brightness": ["Tingkatkan kecerahan layar. Jangan tutupi kode.", "Raise screen brightness. Do not cover the code."],
-  "qr.wake": ["Layar dijaga tetap menyala.", "Screen will stay awake."],
-  "qr.wake.unsupported": ["Browser ini tidak mendukung Wake Lock; layar dapat meredup.", "This browser has no Wake Lock support; the screen may dim."],
+  "qr.wake": ["Layar dijaga tetap menyala selama QR ditampilkan.", "The screen is kept awake while the QR is displayed."],
+  "qr.wake.unsupported": ["Browser tidak dapat menjaga layar tetap menyala. Tingkatkan kecerahan dan hindari layar terkunci.", "The browser cannot keep the screen awake. Increase brightness and prevent the screen from locking."],
+  "qr.wake.pending": ["Menyiapkan layar QR agar tetap menyala…", "Keeping the QR screen awake…"],
   "qr.back": ["Kembali ke detail", "Back to details"],
   "qr.finish": ["Selesai", "Finish"],
   "qr.copy": ["Salin token", "Copy token"],
+  "qr.copy.failed": ["Token tidak dapat disalin. Periksa izin clipboard browser.", "The token could not be copied. Check the browser clipboard permission."],
   "qr.copied": ["Token disalin.", "Token copied."],
   "qr.chars": ["{chars} karakter", "{chars} characters"],
 
@@ -140,6 +148,7 @@ const DICT: Record<string, Entry> = {
   "history.local": ["Riwayat hanya tersimpan di perangkat ini.", "History is stored on this device only."],
   "history.redisplay": ["Tampilkan ulang", "Show again"],
   "history.clear": ["Hapus riwayat", "Clear history"],
+  "history.clear.failed": ["Riwayat gagal dihapus dari perangkat ini.", "The history could not be cleared on this device."],
   "history.clear.confirm": ["Hapus seluruh riwayat di perangkat ini?", "Delete all history on this device?"],
   "history.issued": ["Diterbitkan", "Issued"],
 

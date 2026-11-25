@@ -62,6 +62,33 @@ test("validation rejects a recorder longer than max", () => {
   assert.deepEqual(issues.map((issue) => issue.code), ["max"]);
 });
 
+test("numeric maximum is validated as a numeric bound rather than a text length", () => {
+  const numericProfile = structuredClone(profile);
+  const shift = numericProfile.fields.find((field) => field.key === "shift")!;
+  shift.type = "number";
+  shift.list = undefined;
+  shift.min = 0;
+  shift.max = 5;
+
+  assert.deepEqual(validateValues(numericProfile, bundle, { ...values, shift: 0 }), []);
+  assert.deepEqual(validateValues(numericProfile, bundle, { ...values, shift: "123456" }), [
+    { key: "shift", code: "range", detail: 5 },
+  ]);
+});
+
+test("payload budget includes constants and computed values", () => {
+  const extended = structuredClone(profile);
+  extended.fields.push(
+    { key: "fixed", type: "constant", label: "Fixed", short: "fx", value: "fixed-value" },
+    { key: "auto", type: "computed", label: "Auto", short: "au", source: "profile" },
+  );
+  const previewDerived = derivedValues(extended, { sessionId, deviceKid: "AITQR", now: 1_795_593_600_000 });
+  const payload = buildPayload(extended, bundle, values, previewDerived, sessionId);
+  assert.equal(payload.fx, "fixed-value");
+  assert.equal(payload.au, extended.id ? `${extended.id}/${extended.version}` : "");
+  assert.ok(estimateTokenChars(payload) > estimateTokenChars(buildPayload(profile, bundle, values, derived, sessionId)));
+});
+
 test("session ids are 16 base32 characters and do not repeat", () => {
   const seen = new Set<string>();
   for (let i = 0; i < 2000; i += 1) {

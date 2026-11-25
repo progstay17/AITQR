@@ -38,6 +38,25 @@ test("duplicate short keys are rejected", () => {
   assert.ok(validateProfile(broken, bundle.lists).some((problem) => problem.includes("duplicate short key")));
 });
 
+test("numeric bounds allow zero and reject inverted ranges", () => {
+  const valid = structuredClone(profile);
+  valid.fields.push({
+    key: "zero_allowed",
+    type: "number",
+    label: "Zero allowed",
+    short: "za",
+    min: 0,
+    max: 0,
+  });
+  assert.deepEqual(validateProfile(valid, bundle.lists), []);
+
+  const invalid = structuredClone(valid);
+  const field = invalid.fields.find((item) => item.key === "zero_allowed")!;
+  field.min = 5;
+  field.max = 1;
+  assert.ok(validateProfile(invalid, bundle.lists).some((problem) => problem.includes("min must not exceed max")));
+});
+
 test("unknown profiles are not selectable", () => {
   assert.equal(findProfile(bundle, "not-a-profile"), undefined);
   assert.equal(findProfile(bundle, "zyb-recording")?.version, 1);

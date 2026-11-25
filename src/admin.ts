@@ -3,7 +3,7 @@
  * AITQR never generates account keys — the administrator only stores each account's public key.
  */
 import { el, replace } from "./dom.js";
-import { FIELD_TYPES, validateProfile } from "./profile.js";
+import { DERIVED_SOURCES, FIELD_TYPES, validateProfile } from "./profile.js";
 import { exportAllProfilePresets, exportProfilePreset, importProfilePresets } from "./preset.js";
 import type { Bundle, FieldDef, Localized, Profile } from "./types.js";
 
@@ -65,9 +65,12 @@ interface State {
   dirty: boolean;
   busy: string;
   notice: string | null;
+  noticeKind: "info" | "success" | "error";
   loginError: string | null;
   activeTab: "qr" | "users" | "audit";
 }
+
+const listTypeOverrides = new Map<string, "string" | "number">();
 
 const state: State = {
   session: null,
@@ -79,6 +82,7 @@ const state: State = {
   dirty: false,
   busy: "",
   notice: null,
+  noticeKind: "info",
   loginError: null,
   activeTab: "qr",
 };
@@ -127,8 +131,9 @@ function plainTextError(response: Response, text: string): string {
   return `Server membalas HTTP ${status}${detail ? `: ${detail}` : ""}. Coba lagi beberapa saat lagi.`;
 }
 
-function note(message: string | null): void {
+function note(message: string | null, kind: "info" | "success" | "error" = "info"): void {
   state.notice = message;
+  state.noticeKind = message ? kind : "info";
   render();
 }
 
@@ -157,7 +162,7 @@ function button(
 function input(
   value: string,
   onChange: (next: string) => void,
-  options: { type?: string; placeholder?: string; label?: string; mono?: boolean; readonly?: boolean } = {},
+  options: { type?: string; placeholder?: string; label?: string; mono?: boolean; readonly?: boolean; disabled?: boolean; onBlur?: () => void } = {},
 ): HTMLElement {
   const control = el("input", {
     class: `input${options.mono ? " mono" : ""}`,
@@ -165,11 +170,15 @@ function input(
       type: options.type ?? "text",
       placeholder: options.placeholder,
       readonly: options.readonly,
+      disabled: options.disabled || state.busy !== "",
       autocomplete: "off",
       spellcheck: "false",
     },
     props: { value },
-    on: { input: (event) => onChange((event.target as HTMLInputElement).value) },
+    on: {
+      input: (event) => onChange((event.target as HTMLInputElement).value),
+      blur: options.onBlur ? () => options.onBlur?.() : undefined,
+    },
   });
   if (!options.label) return control;
   return el("label", { class: "field" }, [el("span", { class: "field-label", text: options.label }), control]);
@@ -353,116 +362,305 @@ function renderForbidden(): HTMLElement {
 }
 
 function fieldEditor(profile: Profile, field: FieldDef, index: number): HTMLElement {
-  const parts = localizeParts(field.label);
-  const listName = field.list ?? "";
-  const options = listName && state.doc?.lists[listName] ? state.doc.lists[listName] : [];
-  const markDirty = (): void => {
-    state.dirty = true;
-  };
+  const doc = state.doc;
+  const listName = field.list ?? field.key;
+  const options = listName && doc?.lists[listName] ? doc.lists[listName] : [];
+  const listKey = `${state.accountId ?? ""}::${listName}`;
+  const optionType = listTypeOverrides.get(listKey) ??
+    (options.length > 0 && options.every((value) => typeof value === "number") ? "number" : "string");
+  const markDirty = (): void => { state.dirty = true; };
+  const localizedInput = (
+    locale: "id" | "en",
+    target: "placeholder" | "help",
+  ): HTMLElement => input(localizeParts(field[target])[locale], (next) => {
+    const parts = { ...localizeParts(field[target]), [locale]: next };
+    field[target] = parts.id === parts.en ? parts.id : parts;
+    markDirty();
+  }, { label: target === "placeholder" ? (locale === "id" ? "Placeholder (Indonesia)" : "Placeholder (English)") :
+    (locale === "id" ? "Petunjuk (Indonesia)" : "Help text (English)") });
 
-  return el("div", { class: "field-editor" }, [
-    el("div", { class: "field-editor-head" }, [
-      el("span", { class: "tag mono", text: field.key || "(tanpa kunci)" }),
-      el("div", { class: "actions actions-row" }, [
-        button(
-          "Hapus",
-          () => {
-            profile.fields.splice(index, 1);
-            state.dirty = true;
-            render();
-          },
-          "danger",
-        ),
+  const typeControl = el("select", {
+    class: "input",
+    attrs: { disabled: state.busy !== "" },
+    props: { value: field.type },
+    on: { change: (event) => {
+      field.type = (event.target as HTMLSelectElement).value as FieldDef["type"];
+      if (field.type === "constant" && field.value === undefined) field.value = "";
+      if (field.type === "computed" && !field.source) field.source = "session_id";
+      if ((field.type === "select" || field.type === "device_id") && !field.list) field.list = field.key;
+      markDirty();
+      render();
+    } },
+  }, FIELD_TYPES.map((type) => el("option", { attrs: { value: type, selected: field.type === type }, text: type })));
+
+  const controls: (Node | string | null)[] = [
+    input(field.key, (next) => { field.key = next.trim(); markDirty(); },
+      { label: "Kunci field", mono: true, placeholder: "recorder" }),
+    el("label", { class: "field" }, [el("span", { class: "field-label", text: "Tipe data" }), typeControl]),
+    input(localizeParts(field.label).id, (next) => {
+      const parts = { ...localizeParts(field.label), id: next };
+      field.label = parts.id === parts.en ? parts.id : parts;
+      markDirty();
+    }, { label: "Label (Indonesia)" }),
+    input(localizeParts(field.label).en, (next) => {
+      const parts = { ...localizeParts(field.label), en: next };
+      field.label = parts.id === parts.en ? parts.id : parts;
+      markDirty();
+    }, { label: "Label (English)" }),
+    input(field.short ?? "", (next) => { field.short = next.trim() || undefined; markDirty(); },
+      { label: "Kunci payload (short)", mono: true, placeholder: "r" }),
+    input(field.group ?? "details", (next) => { field.group = next.trim() || "details"; markDirty(); },
+      { label: "Grup form", placeholder: "details / place / camera" }),
+  ];
+
+  if (field.type === "constant") {
+    const valueType = typeof field.value === "number" ? "number" : typeof field.value === "boolean" ? "boolean" : "string";
+    const valueTypeControl = el("select", {
+      class: "input",
+      attrs: { disabled: state.busy !== "" },
+      props: { value: valueType },
+      on: { change: (event) => {
+        const next = (event.target as HTMLSelectElement).value;
+        field.value = next === "number" ? 0 : next === "boolean" ? false : String(field.value ?? "");
+        markDirty();
+        render();
+      } },
+    }, ["string", "number", "boolean"].map((value) =>
+      el("option", { attrs: { value, selected: value === valueType }, text: value })));
+    controls.push(el("label", { class: "field" }, [
+      el("span", { class: "field-label", text: "Tipe nilai konstanta" }), valueTypeControl,
+    ]));
+    if (valueType === "boolean") {
+      controls.push(el("label", { class: "field" }, [
+        el("span", { class: "field-label", text: "Nilai tetap" }),
+        el("select", {
+          class: "input",
+          attrs: { disabled: state.busy !== "" },
+          props: { value: String(field.value) },
+          on: { change: (event) => { field.value = (event.target as HTMLSelectElement).value === "true"; markDirty(); } },
+        }, [
+          el("option", { attrs: { value: "true" }, text: "true" }),
+          el("option", { attrs: { value: "false" }, text: "false" }),
+        ]),
+      ]));
+    } else {
+      controls.push(input(String(field.value ?? ""), (next) => {
+        field.value = valueType === "number" ? (next.trim() === "" ? 0 : Number(next)) : next;
+        markDirty();
+      }, { label: "Nilai tetap", type: valueType === "number" ? "number" : "text" }));
+    }
+  }
+
+  if (field.type === "computed") {
+    controls.push(el("label", { class: "field" }, [
+      el("span", { class: "field-label", text: "Sumber variabel otomatis" }),
+      el("select", {
+        class: "input",
+        attrs: { disabled: state.busy !== "" },
+        props: { value: field.source ?? "session_id" },
+        on: { change: (event) => { field.source = (event.target as HTMLSelectElement).value as FieldDef["source"]; markDirty(); } },
+      }, DERIVED_SOURCES.map((source) =>
+        el("option", { attrs: { value: source, selected: source === (field.source ?? "session_id") }, text: source }))),
+    ]));
+  }
+
+  if (field.type !== "constant" && field.type !== "computed") {
+    if (field.type === "number") {
+      controls.push(input(field.min === undefined ? "" : String(field.min), (next) => {
+        field.min = next.trim() === "" ? undefined : Number(next);
+        markDirty();
+      }, { label: "Nilai minimum", type: "number" }));
+    }
+    controls.push(input(field.max === undefined ? "" : String(field.max), (next) => {
+      field.max = next.trim() === "" ? undefined : Number(next);
+      markDirty();
+    }, { label: field.type === "number" ? "Nilai maksimum" : "Panjang maksimum (karakter)", type: "number" }));
+    controls.push(input(field.pattern ?? "", (next) => { field.pattern = next.trim() || undefined; markDirty(); },
+      { label: "Pola validasi (regex)", mono: true }));
+    controls.push(localizedInput("id", "placeholder"));
+    controls.push(localizedInput("en", "placeholder"));
+    controls.push(localizedInput("id", "help"));
+    controls.push(localizedInput("en", "help"));
+  }
+
+  if (field.type === "select" || (field.type === "device_id" && field.list)) {
+    controls.push(input(field.list ?? field.key, (next) => { field.list = next.trim() || undefined; markDirty(); },
+      { label: "Nama daftar opsi", mono: true }));
+    controls.push(el("label", { class: "field" }, [
+      el("span", { class: "field-label", text: "Tipe nilai opsi" }),
+      el("select", {
+        class: "input",
+        attrs: { disabled: state.busy !== "" },
+        props: { value: optionType },
+        on: { change: (event) => {
+          const nextType = (event.target as HTMLSelectElement).value as "string" | "number";
+          const target = field.list ?? field.key;
+          const key = `${state.accountId ?? ""}::${target}`;
+          const current = state.doc?.lists[target] ?? [];
+          if (!state.doc) return;
+          const converted = current.map((value) => nextType === "number" ? Number(value) : String(value));
+          if (nextType === "number" && converted.some((value) => !Number.isFinite(value))) {
+            note("Daftar opsi berisi nilai yang tidak dapat diubah menjadi angka.", "error");
+            return;
+          }
+          listTypeOverrides.set(key, nextType);
+          state.doc.lists[target] = converted;
+          markDirty();
+          render();
+        } },
+      }, [
+        el("option", { attrs: { value: "string", selected: optionType === "string" }, text: "Teks" }),
+        el("option", { attrs: { value: "number", selected: optionType === "number" }, text: "Angka" }),
+      ]),
+    ]));
+  }
+
+  const identityTitle = typeof field.label === "string" ? field.label : (field.label.id || field.key);
+  const header = el("div", { class: "field-editor-head" }, [
+    el("div", { class: "field-editor-identity" }, [
+      el("span", { class: "field-editor-index", text: String(index + 1).padStart(2, "0") }),
+      el("div", { class: "stack-tight" }, [
+        el("strong", { class: "field-editor-title", text: identityTitle }),
+        el("span", { class: "tag mono", text: field.key || "(tanpa kunci)" }),
       ]),
     ]),
-    el("div", { class: "grid-2" }, [
-      input(field.key, (next) => {
-        field.key = next.trim();
+    el("div", { class: "actions actions-row" }, [
+      button("Naik", () => {
+        if (index <= 0) return;
+        const [item] = profile.fields.splice(index, 1);
+        if (item) profile.fields.splice(index - 1, 0, item);
         markDirty();
-      }, { label: "Kunci field", mono: true, placeholder: "recorder" }),
-      el("label", { class: "field" }, [
-        el("span", { class: "field-label", text: "Tipe" }),
-        el(
-          "select",
-          {
-            class: "input",
-            on: {
-              change: (event) => {
-                field.type = (event.target as HTMLSelectElement).value as FieldDef["type"];
-                markDirty();
-                render();
-              },
-            },
-          },
-          FIELD_TYPES.map((type) => el("option", { attrs: { value: type, selected: field.type === type }, text: type })),
-        ),
-      ]),
-      input(parts.id, (next) => {
-        setLocalized(field, { ...localizeParts(field.label), id: next });
+        render();
+      }, "secondary", index === 0),
+      button("Turun", () => {
+        if (index >= profile.fields.length - 1) return;
+        const [item] = profile.fields.splice(index, 1);
+        if (item) profile.fields.splice(index + 1, 0, item);
         markDirty();
-      }, { label: "Label (Indonesia)" }),
-      input(parts.en, (next) => {
-        setLocalized(field, { ...localizeParts(field.label), en: next });
+        render();
+      }, "secondary", index === profile.fields.length - 1),
+      button("Hapus", () => {
+        if (!window.confirm("Hapus kolom " + field.key + " dari draf ini?")) return;
+        profile.fields.splice(index, 1);
+        const usedLists = new Set(state.doc?.profiles.flatMap((item) => item.fields
+          .filter((entry) => entry !== field)
+          .map((entry) => entry.list).filter((name): name is string => Boolean(name))) ?? []);
+        for (const name of Object.keys(state.doc?.lists ?? {})) {
+          if (!usedLists.has(name)) delete state.doc?.lists[name];
+        }
         markDirty();
-      }, { label: "Label (English)" }),
-      input(field.short ?? "", (next) => {
-        field.short = next.trim() || undefined;
-        markDirty();
-      }, { label: "Kunci payload (short)", mono: true, placeholder: "r" }),
-      input(field.group ?? "details", (next) => {
-        field.group = next.trim() || "details";
-        markDirty();
-      }, { label: "Grup form" }),
-      input(field.max === undefined ? "" : String(field.max), (next) => {
-        field.max = next ? Number(next) : undefined;
-        markDirty();
-      }, { label: "Maks panjang", type: "number" }),
-      input(field.pattern ?? "", (next) => {
-        field.pattern = next.trim() || undefined;
-        markDirty();
-      }, { label: "Pola (regex)", mono: true }),
-      field.type === "select"
-        ? input(listName || field.key, (next) => {
-            field.list = next.trim() || undefined;
-            markDirty();
-          }, { label: "Nama daftar opsi", mono: true })
-        : null,
-      el("label", { class: "field field-inline" }, [
-        el("input", {
-          class: "checkbox",
-          attrs: { type: "checkbox", checked: field.required === true },
-          on: {
-            change: (event) => {
-              field.required = (event.target as HTMLInputElement).checked;
-              markDirty();
-            },
-          },
-        }),
-        el("span", { text: "Wajib diisi" }),
-      ]),
+        render();
+      }, "danger"),
     ]),
-    field.type === "select"
-      ? el("label", { class: "field" }, [
-          el("span", { class: "field-label", text: "Opsi (pisahkan dengan koma)" }),
+  ]);
+
+  const isListField = field.type === "select" || (field.type === "device_id" && Boolean(field.list));
+  return el("section", { class: "field-editor", attrs: { "aria-label": "Konfigurasi kolom " + (index + 1) } }, [
+    header,
+    el("div", { class: "field-editor-grid" }, controls),
+    isListField
+      ? el("label", { class: "field field-options" }, [
+          el("span", { class: "field-label", text: "Pilihan (satu item per baris; koma tetap diperbolehkan)" }),
           el("textarea", {
             class: "input textarea",
-            props: { value: options.map(String).join(", ") },
-            on: {
-              input: (event) => {
-                const doc = state.doc;
-                if (!doc) return;
-                const name = field.list ?? field.key;
-                field.list = name;
-                doc.lists[name] = (event.target as HTMLTextAreaElement).value
-                  .split(",")
-                  .map((part) => part.trim())
-                  .filter((part) => part !== "");
-                markDirty();
-              },
-            },
+            attrs: { disabled: state.busy !== "" },
+            props: { value: (doc?.lists[field.list ?? field.key] ?? []).map(String).join("\n") },
+            on: { input: (event) => {
+              if (!state.doc) return;
+              const target = field.list ?? field.key;
+              const key = `${state.accountId ?? ""}::${target}`;
+              const raw = (event.target as HTMLTextAreaElement).value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+              const currentType = listTypeOverrides.get(key) ?? optionType;
+              const values = currentType === "number" ? raw.map(Number) : raw;
+              if (currentType === "number" && values.some((value) => !Number.isFinite(value))) return;
+              state.doc.lists[target] = values;
+              field.list = target;
+              markDirty();
+            }, change: (event) => {
+              const target = field.list ?? field.key;
+              const key = `${state.accountId ?? ""}::${target}`;
+              const currentType = listTypeOverrides.get(key) ?? optionType;
+              const raw = (event.target as HTMLTextAreaElement).value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+              if (currentType === "number" && raw.some((item) => !Number.isFinite(Number(item)))) {
+                note("Semua opsi harus berupa angka saat tipe nilai opsi adalah Angka.", "error");
+              }
+            } },
           }),
         ])
       : null,
+    field.type !== "constant" && field.type !== "computed"
+      ? el("label", { class: "field field-inline field-required" }, [
+          el("input", {
+            class: "checkbox",
+            attrs: { type: "checkbox", checked: field.required === true, disabled: state.busy !== "" },
+            on: { change: (event) => { field.required = (event.target as HTMLInputElement).checked; markDirty(); } },
+          }),
+          el("span", { text: "Wajib diisi" }),
+        ])
+      : null,
+  ]);
+}
+
+function renderDerivedEditors(profile: Profile): HTMLElement {
+  const entries = profile.derived ?? [];
+  const editors = entries.map((entry, index) => el("section", { class: "field-editor field-editor-derived" }, [
+    el("div", { class: "field-editor-head" }, [
+      el("div", { class: "field-editor-identity" }, [
+        el("span", { class: "field-editor-index", text: "A" + String(index + 1).padStart(2, "0") }),
+        el("strong", { class: "field-editor-title", text: entry.key }),
+      ]),
+      el("div", { class: "actions actions-row" }, [
+        button("Naik", () => {
+          if (index <= 0) return;
+          const [item] = entries.splice(index, 1); if (item) entries.splice(index - 1, 0, item);
+          state.dirty = true; render();
+        }, "secondary", index === 0),
+        button("Turun", () => {
+          if (index >= entries.length - 1) return;
+          const [item] = entries.splice(index, 1); if (item) entries.splice(index + 1, 0, item);
+          state.dirty = true; render();
+        }, "secondary", index === entries.length - 1),
+        button("Hapus", () => {
+          if (!window.confirm("Hapus variabel otomatis " + entry.key + "?")) return;
+          entries.splice(index, 1); state.dirty = true; render();
+        }, "danger"),
+      ]),
+    ]),
+    el("div", { class: "field-editor-grid" }, [
+      input(entry.key, (next) => { entry.key = next.trim(); state.dirty = true; }, { label: "Kunci variabel", mono: true }),
+      input(entry.short ?? "", (next) => { entry.short = next.trim() || undefined; state.dirty = true; }, { label: "Kunci payload", mono: true }),
+      input(localizeParts(entry.label).id, (next) => {
+        const parts = { ...localizeParts(entry.label), id: next };
+        entry.label = parts.id === parts.en ? parts.id : parts; state.dirty = true;
+      }, { label: "Label (Indonesia)" }),
+      input(localizeParts(entry.label).en, (next) => {
+        const parts = { ...localizeParts(entry.label), en: next };
+        entry.label = parts.id === parts.en ? parts.id : parts; state.dirty = true;
+      }, { label: "Label (English)" }),
+      el("label", { class: "field" }, [
+        el("span", { class: "field-label", text: "Sumber otomatis" }),
+        el("select", {
+          class: "input",
+          attrs: { disabled: state.busy !== "" },
+          props: { value: entry.source },
+          on: { change: (event) => { entry.source = (event.target as HTMLSelectElement).value as typeof entry.source; state.dirty = true; } },
+        }, DERIVED_SOURCES.map((source) => el("option", { attrs: { value: source, selected: source === entry.source }, text: source }))),
+      ]),
+    ]),
+  ]));
+  return card("Variabel otomatis", [
+    el("p", { class: "muted small", text: "Nilai ini dibuat AITQR secara otomatis dan tidak dapat diubah petugas." }),
+    ...editors,
+    button("Tambah variabel otomatis", () => {
+      const used = new Set([...profile.fields.map((field) => field.key), ...entries.map((entry) => entry.key)]);
+      let key = "auto_baru";
+      let suffix = 2;
+      while (used.has(key)) key = "auto_baru_" + suffix++;
+      const target = profile.derived ?? (profile.derived = []);
+      target.push({ key, type: "computed", source: "session_id", label: { id: "Nilai otomatis", en: "Automatic value" } });
+      state.dirty = true;
+      render();
+    }, "secondary"),
   ]);
 }
 
@@ -500,6 +698,7 @@ function renderFields(): HTMLElement | null {
     "select",
     {
       class: "input",
+      attrs: { disabled: state.busy !== "" },
       props: { value: state.accountId ?? "" },
       on: {
         change: (event) => {
@@ -528,7 +727,7 @@ function renderFields(): HTMLElement | null {
     "select",
     {
       class: "input",
-      attrs: { disabled: doc.profiles.length === 0 },
+      attrs: { disabled: doc.profiles.length === 0 || state.busy !== "" },
       props: { value: profile?.id ?? "" },
       on: {
         change: (event) => {
@@ -549,7 +748,7 @@ function renderFields(): HTMLElement | null {
   );
 
   const importInput = el("input", {
-    attrs: { type: "file", accept: ".json,application/json", hidden: true },
+    attrs: { type: "file", accept: ".json,application/json", hidden: true, disabled: state.busy !== "" },
     on: {
       change: (event) => {
         const control = event.target as HTMLInputElement;
@@ -592,10 +791,10 @@ function renderFields(): HTMLElement | null {
             }
             state.profileId = imported[0]?.profile.id ?? null;
             state.dirty = true;
-            note(imported.length + " preset berhasil diimpor ke draf akun. Simpan draf sebelum menerbitkan.");
+            note(imported.length + " preset berhasil diimpor ke draf akun. Simpan draf sebelum menerbitkan.", "success");
           })
           .catch((error: unknown) => {
-            note("Import preset gagal: " + (error instanceof Error ? error.message : String(error)));
+            note("Import preset gagal: " + (error instanceof Error ? error.message : String(error)), "error");
           })
           .finally(() => {
             control.value = "";
@@ -647,20 +846,20 @@ function renderFields(): HTMLElement | null {
     if (!profile) return;
     const problems = validateProfile(profile, doc.lists);
     if (problems.length > 0) {
-      note("Preset belum valid: " + problems.join("; "));
+      note("Preset belum valid: " + problems.join("; "), "error");
       return;
     }
     downloadJsonFile(
       safePresetFileName(profile.id) + ".aitqr-preset.json",
       exportProfilePreset(profile, doc),
     );
-    note("Preset " + profile.id + " diekspor sebagai JSON.");
+    note("Preset " + profile.id + " diekspor sebagai JSON.", "success");
   };
 
   const exportAllPresets = (): void => {
     const problems = doc.profiles.flatMap((item) => validateProfile(item, doc.lists));
     if (problems.length > 0) {
-      note("Semua preset harus valid sebelum export sekaligus: " + problems.join("; "));
+      note("Semua preset harus valid sebelum export sekaligus: " + problems.join("; "), "error");
       return;
     }
     if (doc.profiles.length === 0) return;
@@ -668,7 +867,7 @@ function renderFields(): HTMLElement | null {
       "aitqr-presets.json",
       exportAllProfilePresets(doc.profiles, doc),
     );
-    note(doc.profiles.length + " preset diekspor sebagai JSON.");
+    note(doc.profiles.length + " preset diekspor sebagai JSON.", "success");
   };
 
   const presetActions = el("div", { class: "actions actions-row" }, [
@@ -706,26 +905,37 @@ function renderFields(): HTMLElement | null {
     );
   } else {
     const originalProfileId = profile.id;
+    let pendingProfileId = profile.id;
     const titleParts = localizeParts(profile.title);
     children.push(
       el("div", { class: "field-editor" }, [
         el("h3", { class: "card-title", text: "Identitas preset" }),
         el("div", { class: "grid-2" }, [
           input(profile.id, (next) => {
-            const value = next.trim();
-            if (doc.profiles.some((item) => item !== profile && item.id === value)) {
-              note("ID preset sudah dipakai oleh profil lain.");
-              return;
-            }
-            const previous = profile.id;
-            profile.id = value;
-            if (doc.global.allowed_profiles?.includes(originalProfileId)) {
-              doc.global.allowed_profiles = doc.global.allowed_profiles.filter((id) => id !== originalProfileId);
-              if (value) doc.global.allowed_profiles.push(value);
-            }
-            state.profileId = value || previous;
-            state.dirty = true;
-          }, { label: "ID preset", mono: true, placeholder: "nama-profil" }),
+            pendingProfileId = next.trim();
+          }, {
+            label: "ID preset",
+            mono: true,
+            placeholder: "nama-profil",
+            onBlur: () => {
+              const value = pendingProfileId;
+              if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(value)) {
+                note("ID preset harus 2–64 karakter, huruf kecil, angka, atau tanda hubung; karakter pertama harus huruf/angka.", "error");
+                return;
+              }
+              if (doc.profiles.some((item) => item !== profile && item.id === value)) {
+                note("ID preset sudah dipakai oleh profil lain.", "error");
+                return;
+              }
+              profile.id = value;
+              if (doc.global.allowed_profiles?.includes(originalProfileId)) {
+                doc.global.allowed_profiles = doc.global.allowed_profiles.filter((id) => id !== originalProfileId);
+                if (value) doc.global.allowed_profiles.push(value);
+              }
+              state.profileId = value;
+              state.dirty = true;
+            },
+          }),
           input(String(profile.version), (next) => {
             profile.version = next.trim() ? Number(next) : 0;
             state.dirty = true;
@@ -782,6 +992,7 @@ function renderFields(): HTMLElement | null {
         ),
       ]),
       ...profile.fields.map((field, index) => fieldEditor(profile, field, index)),
+      renderDerivedEditors(profile),
     );
   }
 
@@ -790,6 +1001,7 @@ function renderFields(): HTMLElement | null {
       el("summary", { text: "JSON mentah draf akun" }),
       el("textarea", {
         class: "input textarea mono",
+        attrs: { disabled: state.busy !== "" },
         props: { value: JSON.stringify(doc, null, 2) },
         on: {
           change: (event) => {
@@ -801,9 +1013,9 @@ function renderFields(): HTMLElement | null {
               state.doc = parsed;
               state.dirty = true;
               state.profileId = parsed.profiles[0]?.id ?? null;
-              note("JSON diterapkan ke draf akun di layar. Tekan Simpan draf akun untuk menyimpan.");
+              note("JSON diterapkan ke draf akun di layar. Tekan Simpan draf akun untuk menyimpan.", "success");
             } catch (error) {
-              note("JSON tidak valid: " + (error instanceof Error ? error.message : String(error)));
+              note("JSON tidak valid: " + (error instanceof Error ? error.message : String(error)), "error");
             }
           },
         },
@@ -818,12 +1030,29 @@ function renderFields(): HTMLElement | null {
   );
 }
 
+async function runAdminMutation(action: () => Promise<void>, successMessage: string): Promise<void> {
+  if (state.busy) return;
+  state.busy = "mutation";
+  state.notice = "Memproses perubahan akun…";
+  state.noticeKind = "info";
+  render();
+  try {
+    await action();
+    await refresh();
+    state.busy = "";
+    note(successMessage, "success");
+  } catch (error) {
+    state.busy = "";
+    note(error instanceof Error ? error.message : String(error), "error");
+  }
+}
+
 function renderUsers(): HTMLElement | null {
   const users = state.loaded?.users ?? [];
-  const username = el("input", { class: "input", attrs: { type: "text", autocapitalize: "none", placeholder: "petugas01" } }) as HTMLInputElement;
-  const display = el("input", { class: "input", attrs: { type: "text", placeholder: "Nama tampilan" } }) as HTMLInputElement;
-  const password = el("input", { class: "input", attrs: { type: "password", autocomplete: "new-password", minlength: 8 } }) as HTMLInputElement;
-  const role = el("select", { class: "input" }, [
+  const username = el("input", { class: "input", attrs: { type: "text", autocapitalize: "none", placeholder: "petugas01", disabled: state.busy !== "" } }) as HTMLInputElement;
+  const display = el("input", { class: "input", attrs: { type: "text", placeholder: "Nama tampilan", disabled: state.busy !== "" } }) as HTMLInputElement;
+  const password = el("input", { class: "input", attrs: { type: "password", autocomplete: "new-password", minlength: 8, disabled: state.busy !== "" } }) as HTMLInputElement;
+  const role = el("select", { class: "input", attrs: { disabled: state.busy !== "" } }, [
     el("option", { attrs: { value: "staff" }, text: "Petugas" }),
     el("option", { attrs: { value: "admin" }, text: "Admin" }),
   ]) as HTMLSelectElement;
@@ -836,38 +1065,62 @@ function renderUsers(): HTMLElement | null {
       el("label", { class: "field" }, [el("span", { class: "field-label", text: "Peran" }), role]),
     ]),
     el("div", { class: "actions actions-row" }, [button("Tambah akun", () => {
-      void api<{ id: string }>("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "create", username: username.value, displayName: display.value, password: password.value, role: role.value }) })
-        .then((result) => { state.accountId = result.id; state.profileId = null; return refresh().then(() => note("Akun petugas dibuat.")); })
-        .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+      const account = { username: username.value, displayName: display.value, password: password.value, role: role.value };
+      void runAdminMutation(async () => {
+        const result = await api<{ id: string }>("/api/admin/users", {
+          method: "POST",
+          body: JSON.stringify({ action: "create", ...account }),
+        });
+        state.accountId = result.id;
+        state.profileId = null;
+      }, "Akun petugas dibuat.");
     }, "primary")]),
     users.length === 0 ? el("p", { class: "muted", text: "Belum ada akun." }) : el("ul", { class: "history-list" }, users.map((user) => userRow(user))),
   ], "Akun hanya mengatur akses masuk. QR dienkripsi untuk public key decoder, bukan ditandatangani per petugas.");
 }
 
 function userRow(user: UserRow): HTMLElement {
-  const passwordInput = el("input", { class: "input", attrs: { type: "password", autocomplete: "new-password", placeholder: "kata sandi baru (min. 8)" } }) as HTMLInputElement;
+  const passwordInput = el("input", {
+    class: "input",
+    attrs: {
+      type: "password",
+      autocomplete: "new-password",
+      placeholder: "kata sandi baru (min. 8)",
+      disabled: state.busy !== "",
+    },
+  }) as HTMLInputElement;
   return el("li", { class: "history-item history-item-stack" }, [
     el("div", { class: "stack-tight" }, [
-      el("span", { text: `${user.displayName ?? user.username} ? ${user.role}` }),
-      el("span", { class: "mono small muted", text: `${user.username} ? ${user.status}` }),
+      el("span", { text: `${user.displayName ?? user.username} · ${user.role}` }),
+      el("span", { class: "mono small muted", text: `${user.username} · ${user.status}` }),
     ]),
     el("label", { class: "field" }, [el("span", { class: "field-label", text: "Reset kata sandi" }), passwordInput]),
     el("div", { class: "actions actions-row" }, [
       button("Simpan sandi", () => {
-        void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "password", id: user.id, password: passwordInput.value }) })
-          .then(() => refresh().then(() => note("Kata sandi diperbarui.")))
-          .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+        const password = passwordInput.value;
+        void runAdminMutation(async () => {
+          await api("/api/admin/users", {
+            method: "POST",
+            body: JSON.stringify({ action: "password", id: user.id, password }),
+          });
+        }, "Kata sandi diperbarui.");
       }, "secondary"),
       button(user.status === "active" ? "Nonaktifkan" : "Aktifkan", () => {
-        void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "update", id: user.id, status: user.status === "active" ? "disabled" : "active" }) })
-          .then(() => refresh().then(() => note("Status diperbarui.")))
-          .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+        void runAdminMutation(async () => {
+          await api("/api/admin/users", {
+            method: "POST",
+            body: JSON.stringify({ action: "update", id: user.id, status: user.status === "active" ? "disabled" : "active" }),
+          });
+        }, "Status akun diperbarui.");
       }, user.status === "active" ? "danger" : "secondary"),
       button("Hapus", () => {
         if (!window.confirm(`Hapus akun ${user.username}?`)) return;
-        void api("/api/admin/users", { method: "POST", body: JSON.stringify({ action: "delete", id: user.id }) })
-          .then(() => refresh().then(() => note("Akun dihapus.")))
-          .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
+        void runAdminMutation(async () => {
+          await api("/api/admin/users", {
+            method: "POST",
+            body: JSON.stringify({ action: "delete", id: user.id }),
+          });
+        }, "Akun petugas dihapus.");
       }, "danger"),
     ]),
   ]);
@@ -940,37 +1193,52 @@ function renderAudit(): HTMLElement | null {
 // ---------------------------------------------------------------- actions
 
 async function saveDraft(): Promise<void> {
-  if (!state.doc || !state.accountId) return;
+  if (!state.doc || !state.accountId || state.busy) return;
+  const accountId = state.accountId;
+  const snapshot = JSON.parse(JSON.stringify(state.doc)) as Bundle;
+  state.busy = "save";
+  state.notice = "Menyimpan draf akun…";
+  state.noticeKind = "info";
+  render();
   try {
     await api("/api/admin/account-config", {
       method: "PUT",
-      body: JSON.stringify({ accountId: state.accountId, source: JSON.stringify(state.doc, null, 2) }),
+      body: JSON.stringify({ accountId, source: JSON.stringify(snapshot, null, 2) }),
     });
-    state.dirty = false;
     await load();
-    note("Draf field tersimpan khusus untuk akun ini.");
+    state.busy = "";
+    note("Draf konfigurasi tersimpan khusus untuk akun ini.", "success");
   } catch (error) {
-    note(error instanceof Error ? error.message : String(error));
+    state.busy = "";
+    note(error instanceof Error ? error.message : String(error), "error");
   }
 }
 
 async function publish(): Promise<void> {
-  const account = state.loaded?.users.find((item) => item.id === state.accountId);
-  if (!state.accountId || !account) return;
+  if (state.busy) return;
+  const accountId = state.accountId;
+  const account = state.loaded?.users.find((item) => item.id === accountId);
+  if (!accountId || !account) return;
   if (state.dirty) {
-    note("Simpan draf akun terlebih dahulu sebelum menerbitkan.");
+    note("Simpan draf akun terlebih dahulu sebelum menerbitkan.", "info");
     return;
   }
   if (!window.confirm("Terbitkan konfigurasi untuk akun " + account.username + " saja? Akun lain tidak akan berubah.")) return;
+  state.busy = "publish";
+  state.notice = "Menerbitkan konfigurasi akun…";
+  state.noticeKind = "info";
+  render();
   try {
     const result = await api<{ seq: number; kid: string }>("/api/admin/account-config/publish", {
       method: "POST",
-      body: JSON.stringify({ accountId: state.accountId }),
+      body: JSON.stringify({ accountId }),
     });
     await load();
-    note("Konfigurasi " + account.username + " terbit pada urutan " + result.seq + " (kid " + result.kid + ").");
+    state.busy = "";
+    note("Konfigurasi " + account.username + " terbit pada urutan " + result.seq + " (kid " + result.kid + ").", "success");
   } catch (error) {
-    note(error instanceof Error ? error.message : String(error));
+    state.busy = "";
+    note(error instanceof Error ? error.message : String(error), "error");
   }
 }
 
@@ -988,7 +1256,13 @@ function render(): void {
   renderHeader();
   const main = root();
   if (!state.session) {
-    replace(main, el("p", { class: "muted", text: "Memuat…" }));
+    replace(main, el("div", { class: "stack" }, [
+      state.notice ? el("div", {
+        class: `admin-toast admin-toast-${state.noticeKind}`,
+        attrs: { role: state.noticeKind === "error" ? "alert" : "status", "aria-live": state.noticeKind === "error" ? "assertive" : "polite" },
+      }, [el("span", { text: state.notice })]) : null,
+      el("p", { class: "muted", text: "Memuat…" }),
+    ]));
     return;
   }
   if (!state.session.signedIn) {
@@ -1008,18 +1282,20 @@ function render(): void {
     main,
     el("div", { class: "stack" }, [
       state.notice
-        ? el("div", { class: "notice", attrs: { role: "status" } }, [
+        ? el("div", {
+            class: `admin-toast admin-toast-${state.noticeKind}`,
+            attrs: {
+              role: state.noticeKind === "error" ? "alert" : "status",
+              "aria-live": state.noticeKind === "error" ? "assertive" : "polite",
+              "aria-atomic": "true",
+            },
+          }, [
             el("span", { text: state.notice }),
             el("button", {
               class: "link-button",
-              attrs: { type: "button" },
+              attrs: { type: "button", "aria-label": "Tutup notifikasi" },
               text: "×",
-              on: {
-                click: () => {
-                  state.notice = null;
-                  render();
-                },
-              },
+              on: { click: () => { state.notice = null; render(); } },
             }),
           ])
         : null,
@@ -1029,7 +1305,7 @@ function render(): void {
       ]),
       el("nav", { class: "admin-tabs", attrs: { "aria-label": "Pengaturan AITQR" } }, [
         ...([ ["qr", "QR & Profil"], ["users", "Akun Petugas"], ["audit", "Aktivitas"] ] as const).map(([id, label]) =>
-          el("button", { class: `admin-tab${state.activeTab === id ? " active" : ""}`, attrs: { type: "button", "aria-pressed": String(state.activeTab === id) }, text: label, on: { click: () => { state.activeTab = id; render(); } } }),
+          el("button", { class: `admin-tab${state.activeTab === id ? " active" : ""}`, attrs: { type: "button", "aria-pressed": String(state.activeTab === id), disabled: state.busy !== "" }, text: label, on: { click: () => { state.activeTab = id; render(); } } }),
         ),
       ]),
       ...(state.activeTab === "qr" ? [renderFields(), renderKeys(), renderPublish()] : state.activeTab === "users" ? [renderUsers()] : [renderAudit()]),
@@ -1061,7 +1337,7 @@ async function load(): Promise<void> {
 
 export function startAdmin(): void {
   load().catch((error: unknown) => {
-    note(error instanceof Error ? error.message : String(error));
+    note(error instanceof Error ? error.message : String(error), "error");
   });
 }
 

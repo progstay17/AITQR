@@ -54,7 +54,7 @@ export function validateValues(
     if (field.type === "checkbox") continue;
 
     const text = String(raw);
-    if (field.max !== undefined && text.length > field.max) {
+    if (field.type !== "number" && field.max !== undefined && text.length > field.max) {
       issues.push({ key: field.key, code: "max", detail: field.max });
     }
     if (field.pattern !== undefined && !new RegExp(field.pattern).test(text)) {

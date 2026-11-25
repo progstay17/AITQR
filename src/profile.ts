@@ -65,7 +65,7 @@ export function validateProfile(profile: Profile, lists: Record<string, ListValu
       if (shorts.has(field.short)) problems.push(`${label}: duplicate short key ${field.short}`);
       shorts.add(field.short);
     }
-    if (field.type === "select") {
+    if (field.type === "select" || (field.type === "device_id" && field.list)) {
       if (!field.list) {
         problems.push(`${label}: select needs a list name`);
       } else {
@@ -86,8 +86,14 @@ export function validateProfile(profile: Profile, lists: Record<string, ListValu
     if (field.type === "computed" && !DERIVED_SOURCES.includes(field.source as never)) {
       problems.push(`${label}: computed needs a known source`);
     }
-    if (field.max !== undefined && (!Number.isInteger(field.max) || field.max < 1)) {
-      problems.push(`${label}: max must be a positive integer`);
+    if (field.type === "number") {
+      if (field.min !== undefined && !Number.isFinite(field.min)) problems.push(`${label}: min must be finite`);
+      if (field.max !== undefined && !Number.isFinite(field.max)) problems.push(`${label}: max must be finite`);
+      if (field.min !== undefined && field.max !== undefined && field.min > field.max) {
+        problems.push(`${label}: min must not exceed max`);
+      }
+    } else if (field.max !== undefined && (!Number.isInteger(field.max) || field.max < 1)) {
+      problems.push(`${label}: max must be a positive integer character limit`);
     }
   }
 
