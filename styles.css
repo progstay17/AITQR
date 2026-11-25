@@ -1321,3 +1321,26 @@ body::before {
     transition: none !important;
   }
 }
+
+
+/* Admin QR Inspector */
+.qr-camera-preview {
+  display: block;
+  width: 100%;
+  max-height: min(58vh, 520px);
+  min-height: 220px;
+  object-fit: cover;
+  background: #090d12;
+  border: 1px solid var(--line, #29313b);
+  border-radius: 14px;
+}
+.qr-decrypt-result {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  border: 1px solid var(--line, #29313b);
+  border-radius: 12px;
+  background: var(--surface, #111820);
+}
