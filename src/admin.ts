@@ -16,7 +16,7 @@ interface Health {
   admins: number;
   users: number;
   publishedSeq: number | null;
-  configured: { adminKey: boolean; sessionKey: boolean };
+  configured: { adminKey: boolean; sessionKey: boolean; vaultKey: boolean };
 }
 
 interface UserRow {
@@ -1313,7 +1313,7 @@ function renderInspector(): HTMLElement {
     video,
     el("div", { class: "actions actions-row" }, [
       button("Buka kamera", () => void startInspectorCamera(video, tokenInput), "primary", state.busy !== ""),
-      button("Tutup kamera", () => { stopInspectorCamera(); video.srcObject = null; }, "secondary", !cameraStream),
+      button("Tutup kamera", () => { stopInspectorCamera(); video.srcObject = null; }, "secondary"),
     ]),
     el("label", { class: "field" }, [el("span", { class: "field-label", text: "Atau tempel token MQ1" }), tokenInput]),
     el("div", { class: "actions" }, [button("Decrypt token", () => void decryptInspectorToken(tokenInput.value), "secondary")]),
@@ -1324,6 +1324,7 @@ function renderInspector(): HTMLElement {
     ]) : null,
   ]);
   return el("div", { class: "stack" }, [
+    state.health?.configured.vaultKey ? null : el("p", { class: "field-error", attrs: { role: "alert" }, text: "Vault belum aktif. Tambahkan AITQR_VAULT_MASTER_KEY (64 karakter hex) ke environment VPS, lalu restart layanan." }),
     keyCard,
     scannerCard,
     el("p", { class: "muted small", text: "Catatan: MQ1 tidak membawa ID akun. Pemilihan akun diperlukan sebelum decrypt. Private key tidak pernah dikirim kembali ke browser." }),
