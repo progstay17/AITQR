@@ -37,11 +37,21 @@ interface AuditRow {
   detail: string | null;
 }
 
+interface AccountConfigRow {
+  userId: string;
+  draftSource: string;
+  updatedAt: number;
+  updatedBy: string | null;
+  publishedAt: number;
+  publishedSeq: number;
+}
+
 interface AdminState {
   user: { username: string; displayName: string | null; role: string };
   draft: { source: string; updatedAt: number; updatedBy: string | null } | null;
   published: { seq: number; created_at: number; created_by: string | null; note: string | null } | null;
   users: UserRow[];
+  accountConfigs: AccountConfigRow[];
   audit: AuditRow[];
   keys: { adminKeyConfigured: boolean; decoderSecretConfigured: boolean };
 }
@@ -63,6 +73,7 @@ interface State {
   loaded: AdminState | null;
   doc: Bundle | null;
   profileId: string | null;
+  accountId: string | null;
   dirty: boolean;
   busy: string;
   notice: string | null;
@@ -76,6 +87,7 @@ const state: State = {
   loaded: null,
   doc: null,
   profileId: null,
+  accountId: null,
   dirty: false,
   busy: "",
   notice: null,
@@ -192,6 +204,18 @@ function selectedProfile(): Profile | null {
   const doc = state.doc;
   if (!doc || doc.profiles.length === 0) return null;
   return doc.profiles.find((profile) => profile.id === state.profileId) ?? doc.profiles[0];
+}
+
+function selectedAccountConfig(): AccountConfigRow | null {
+  return state.loaded?.accountConfigs.find((config) => config.userId === state.accountId) ?? null;
+}
+
+function loadSelectedAccountDraft(): void {
+  const config = selectedAccountConfig();
+  state.doc = config ? (JSON.parse(config.draftSource) as Bundle) : null;
+  state.dirty = false;
+  const ids = state.doc?.profiles.map((profile) => profile.id) ?? [];
+  if (!state.profileId || !ids.includes(state.profileId)) state.profileId = ids[0] ?? null;
 }
 
 async function refresh(): Promise<void> {
@@ -458,57 +482,114 @@ function fieldEditor(profile: Profile, field: FieldDef, index: number): HTMLElem
 
 function renderFields(): HTMLElement | null {
   const doc = state.doc;
-  if (!doc) return null;
+  const account = state.loaded?.users.find((item) => item.id === state.accountId);
+  const accountConfig = selectedAccountConfig();
+  if (!doc || !account || !accountConfig) {
+    return card("Kolom metadata per akun", [
+      el("p", { class: "muted", text: "Pilih atau buat akun untuk mengatur field secara terpisah." }),
+    ]);
+  }
   const profile = selectedProfile();
-  if (!profile) return card("Kolom metadata", [el("p", { class: "muted", text: "Draf belum punya profil." })]);
+  if (!profile) {
+    return card("Kolom metadata per akun", [el("p", { class: "muted", text: "Draf akun belum memiliki profil." })]);
+  }
+
+  const accountSelector = el(
+    "select",
+    {
+      class: "input",
+      props: { value: state.accountId ?? "" },
+      on: {
+        change: (event) => {
+          const next = (event.target as HTMLSelectElement).value;
+          if (state.dirty && !window.confirm("Buang perubahan yang belum disimpan untuk akun ini?")) {
+            (event.target as HTMLSelectElement).value = state.accountId ?? "";
+            return;
+          }
+          state.accountId = next;
+          state.profileId = null;
+          loadSelectedAccountDraft();
+          render();
+        },
+      },
+    },
+    (state.loaded?.users ?? []).map((item) =>
+      el("option", {
+        attrs: { value: item.id, selected: item.id === state.accountId },
+        text: (item.displayName ?? item.username) + " ? " + item.username + " ? " + item.role + " ? " + item.status,
+      }),
+    ),
+  );
+
+  const profileSelector = el(
+    "select",
+    {
+      class: "input",
+      props: { value: profile.id },
+      on: {
+        change: (event) => {
+          state.profileId = (event.target as HTMLSelectElement).value;
+          render();
+        },
+      },
+    },
+    doc.profiles.map((item) =>
+      el("option", { attrs: { value: item.id, selected: item.id === profile.id }, text: item.id + " v" + item.version }),
+    ),
+  );
 
   return card(
-    "Kolom metadata",
+    "Kolom metadata per akun",
     [
+      el("p", {
+        class: "muted small",
+        text: "Field, daftar opsi, profil, dan kunci penerima di bawah ini hanya berlaku untuk akun " +
+          (account.displayName ?? account.username) + ". Setiap akun memiliki draf dan publikasi terpisah.",
+      }),
+      el("label", { class: "field" }, [
+        el("span", { class: "field-label", text: "Akun yang dikonfigurasi" }),
+        accountSelector,
+      ]),
       el("div", { class: "actions actions-row" }, [
-        el(
-          "select",
-          {
-            class: "input",
-            on: {
-              change: (event) => {
-                state.profileId = (event.target as HTMLSelectElement).value;
-                render();
-              },
-            },
-          },
-          doc.profiles.map((item) =>
-            el("option", { attrs: { value: item.id, selected: item.id === profile.id }, text: `${item.id} v${item.version}` }),
-          ),
-        ),
+        profileSelector,
         button(
           "Tambah kolom",
           () => {
             const used = new Set(profile.fields.map((item) => item.key));
             let key = "kolom_baru";
             let n = 2;
-            while (used.has(key)) key = `kolom_baru_${n++}`;
-            profile.fields.push({ key, type: "text", label: { id: "Kolom baru", en: "New field" }, required: false, group: "details" });
+            while (used.has(key)) key = "kolom_baru_" + n++;
+            profile.fields.push({
+              key,
+              type: "text",
+              label: { id: "Kolom baru", en: "New field" },
+              required: false,
+              group: "details",
+            });
             state.dirty = true;
             render();
           },
           "secondary",
         ),
-        button("Simpan draf", () => void saveDraft(), "primary"),
       ]),
-      el("p", { class: "muted small", text: "Kolom dengan kunci payload masuk ke token; tanpa kunci payload hanya tampil di formulir." }),
+      el("p", {
+        class: "muted small",
+        text: "Kolom dengan kunci payload masuk ke token; tanpa kunci payload hanya tampil di formulir.",
+      }),
       ...profile.fields.map((field, index) => fieldEditor(profile, field, index)),
       el("details", { class: "details" }, [
-        el("summary", { text: "JSON mentah draf" }),
+        el("summary", { text: "JSON mentah draf akun" }),
         el("textarea", {
           class: "input textarea mono",
           props: { value: JSON.stringify(doc, null, 2) },
           on: {
             change: (event) => {
               try {
-                state.doc = JSON.parse((event.target as HTMLTextAreaElement).value) as Bundle;
+                const parsed = JSON.parse((event.target as HTMLTextAreaElement).value) as Bundle;
+                state.doc = parsed;
                 state.dirty = true;
-                note("JSON diterapkan ke draf di layar. Tekan Simpan draf untuk menyimpan.");
+                state.profileId = parsed.profiles[0]?.id ?? null;
+                note("JSON diterapkan ke draf akun di layar. Tekan Simpan draf akun untuk menyimpan.");
               } catch {
                 note("JSON tidak valid");
               }
@@ -517,7 +598,7 @@ function renderFields(): HTMLElement | null {
         }),
       ]),
     ],
-    "Field formulir yang dilihat petugas, lengkap dengan tipe dan opsi daftar.",
+    "Konfigurasi terisolasi untuk akun " + account.username + ". Perubahan di sini tidak mengubah akun lain.",
   );
 }
 
@@ -560,7 +641,7 @@ function renderUsers(): HTMLElement | null {
         button(
           "Tambah akun",
           () => {
-            void api("/api/admin/users", {
+            void api<{ id: string }>("/api/admin/users", {
               method: "POST",
               body: JSON.stringify({
                 action: "create",
@@ -571,7 +652,11 @@ function renderUsers(): HTMLElement | null {
                 role: role.value,
               }),
             })
-              .then(() => refresh().then(() => note("Akun dibuat.")))
+              .then((result) => {
+                state.accountId = result.id;
+                state.profileId = null;
+                return refresh().then(() => note("Akun dibuat dengan konfigurasi field miliknya sendiri."));
+              })
               .catch((error: unknown) => note(error instanceof Error ? error.message : String(error)));
           },
           "primary",
@@ -739,23 +824,34 @@ function renderVerifyResult(result: VerifyResult): HTMLElement {
 
 function renderPublish(): HTMLElement | null {
   const loaded = state.loaded;
-  if (!loaded) return null;
-  return card("Publikasi", [
+  const config = selectedAccountConfig();
+  const account = loaded?.users.find((item) => item.id === state.accountId);
+  if (!loaded || !config || !account) return null;
+  return card("Publikasi konfigurasi akun", [
     el("p", {
       class: "mono small",
-      text: loaded.published
-        ? `Terbit: urutan ${loaded.published.seq} · ${new Date(loaded.published.created_at).toLocaleString("id-ID")}`
-        : "Belum ada bundel terbit",
+      text: "Akun: " + (account.displayName ?? account.username) + " (" + account.username + ")",
+    }),
+    el("p", {
+      class: "mono small",
+      text: "Publikasi akun: urutan " + config.publishedSeq + " ? " + new Date(config.publishedAt).toLocaleString("id-ID"),
     }),
     el("p", {
       class: "muted small",
-      text: state.dirty ? "Draf punya perubahan yang belum disimpan." : "Draf tersimpan sama dengan draf di layar.",
+      text: "Draf terakhir: " + new Date(config.updatedAt).toLocaleString("id-ID") + " ? " + (config.updatedBy ?? "-"),
+    }),
+    el("p", {
+      class: "muted small",
+      text: state.dirty ? "Ada perubahan yang belum disimpan untuk akun ini." : "Draf akun tersimpan.",
     }),
     el("div", { class: "actions actions-row" }, [
-      button("Simpan draf", () => void saveDraft(), "secondary"),
-      button("Tandatangani & terbitkan", () => void publish(), "primary"),
+      button("Simpan draf akun", () => void saveDraft(), "secondary"),
+      button("Terbitkan untuk akun ini", () => void publish(), "primary"),
     ]),
-    el("p", { class: "muted small", text: "Penerbitan menaikkan urutan dan menandatangani bundel di server dengan kunci admin." }),
+    el("p", {
+      class: "muted small",
+      text: "Penerbitan hanya memperbarui form akun ini. Konfigurasi akun lain tidak berubah.",
+    }),
   ]);
 }
 
@@ -806,23 +902,35 @@ async function verifyToken(): Promise<void> {
 }
 
 async function saveDraft(): Promise<void> {
-  if (!state.doc) return;
+  if (!state.doc || !state.accountId) return;
   try {
-    await api("/api/admin/bundle", { method: "PUT", body: JSON.stringify({ source: JSON.stringify(state.doc, null, 2) }) });
+    await api("/api/admin/account-config", {
+      method: "PUT",
+      body: JSON.stringify({ accountId: state.accountId, source: JSON.stringify(state.doc, null, 2) }),
+    });
     state.dirty = false;
     await load();
-    note("Draf tersimpan.");
+    note("Draf field tersimpan khusus untuk akun ini.");
   } catch (error) {
     note(error instanceof Error ? error.message : String(error));
   }
 }
 
 async function publish(): Promise<void> {
-  if (!window.confirm("Terbitkan draf sekarang? Urutan naik satu dan semua akun akan memakai versi ini.")) return;
+  const account = state.loaded?.users.find((item) => item.id === state.accountId);
+  if (!state.accountId || !account) return;
+  if (state.dirty) {
+    note("Simpan draf akun terlebih dahulu sebelum menerbitkan.");
+    return;
+  }
+  if (!window.confirm("Terbitkan konfigurasi untuk akun " + account.username + " saja? Akun lain tidak akan berubah.")) return;
   try {
-    const result = await api<{ seq: number; kid: string }>("/api/admin/publish", { method: "POST", body: "{}" });
+    const result = await api<{ seq: number; kid: string }>("/api/admin/account-config/publish", {
+      method: "POST",
+      body: JSON.stringify({ accountId: state.accountId }),
+    });
     await load();
-    note(`Bundel urutan ${result.seq} terbit dan ditandatangani (kid ${result.kid}).`);
+    note("Konfigurasi " + account.username + " terbit pada urutan " + result.seq + " (kid " + result.kid + ").");
   } catch (error) {
     note(error instanceof Error ? error.message : String(error));
   }
@@ -900,11 +1008,11 @@ async function load(): Promise<void> {
   state.health = health;
   if (session.signedIn && session.user?.role === "admin") {
     state.loaded = await api<AdminState>("/api/admin/state");
-    state.doc = state.loaded.draft ? (JSON.parse(state.loaded.draft.source) as Bundle) : null;
-    if (state.doc) {
-      const ids = state.doc.profiles.map((profile) => profile.id);
-      if (!state.profileId || !ids.includes(state.profileId)) state.profileId = ids[0] ?? null;
+    const accountIds = state.loaded.accountConfigs.map((config) => config.userId);
+    if (!state.accountId || !accountIds.includes(state.accountId)) {
+      state.accountId = state.loaded.users[0]?.id ?? null;
     }
+    loadSelectedAccountDraft();
   } else {
     state.loaded = null;
     state.doc = null;

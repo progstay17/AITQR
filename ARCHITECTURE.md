@@ -5,7 +5,7 @@ Pasangan dokumen: `PRD.md`, `AGENTS.md`. Konsumen pertama: `ZYBTool/ARCHITECTURE
 
 ## 1. Arsitektur yang direkomendasikan
 
-**PWA statis tanpa backend**, dihosting lewat HTTPS. Semua logika (profil, form, payload, tanda tangan, QR) berjalan di browser HP; kunci tanda tangan tidak pernah meninggalkan perangkat; konfigurasi datang sebagai **bundel bertanda tangan admin** yang diverifikasi di klien.
+**PWA mobile-first + Cloudflare Worker + D1**. Form, payload, tanda tangan QR petugas, dan render QR berjalan di browser HP; kunci Ed25519 akun tetap non-extractable di perangkat. Worker menangani login, administrasi akun, penyimpanan konfigurasi per akun, signing bundle admin, dan verifikasi token. D1 menyimpan akun/konfigurasi/audit/kunci decoder, bukan riwayat operasional petugas.
 
 Dasar teknis, dari pembacaan repo Metaqr (`js/`, v0.4.0) [F]:
 - Encoder JS tanpa dependensi: `encode(metadata, publicKey, {signer, compress, maxChars})` → string token (`MQ2:` bila ada `signer`). Pembuatan gambar QR **tidak** termasuk; AITQR harus menyediakan renderer QR sendiri.
@@ -56,7 +56,7 @@ Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; 
 - **Anti-rollback:** `seq` harus ≥ `seq` yang tersimpan; bundel lebih lama ditolak.
 - **Pemilihan bundel:** bundel bawaan di build; pembaruan di-fetch dari origin yang sama; verifikasi gagal → tetap pakai bundel sah terakhir, tampilkan alasan.
 - **Kenapa tanda tangan bundel kritis:** `recipient` (kunci publik decoder) ada di profil. Bundel palsu dapat mengalihkan enkripsi ke kunci penyerang (QR terbaca penyerang). Tanda tangan dan daftar kunci tepercaya mencegahnya.
-- **Privasi bundel:** `lists` terbaca siapa pun yang bisa mengakses situs. Jangan memasukkan daftar nama orang jika hosting tidak dibatasi (PRD D1: hosting dan kontrol akses).
+- **Privasi bundel:** bundle akun tidak dipublikasikan sebagai static asset. Worker mengirim bundle terbit hanya kepada sesi akun yang sesuai (`GET /api/account/config`) dengan `Cache-Control: private, no-store` dan `Vary: Cookie`. Jangan memasukkan data pribadi yang tidak diperlukan ke field atau daftar opsi.
 
 **Skema profil `aitqr.profile/1`** (ringkas; kontrak lengkap ada di repo):
 
@@ -70,11 +70,23 @@ Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; 
 | `limits` | `max_token_chars` (default 800), `target_token_chars` (default 400). |
 | `qr` | Override `ecc`, `min_display_ratio`. |
 
+## 3.1. Kepemilikan konfigurasi per akun
+
+Tabel D1 `account_configs` memiliki satu baris per `users.id`: `draft_source`, `published_source`, `draft_updated_at`, `draft_updated_by`, `published_at`, dan `published_seq`. Profil, field, label, daftar opsi, mapping payload, dan public key penerima berada di salinan bundle masing-masing akun.
+
+- Pada migrasi, setiap akun lama mendapat salinan satu kali dari `bundle_draft` global yang sudah ada; akun baru mendapat salinan template yang sama saat dibuat.
+- Setelah penyalinan, `bundle_draft` hanya menjadi template awal/kompatibilitas. Editor admin membaca dan menyimpan `account_configs` untuk akun terpilih; tidak ada draft bersama yang dipakai semua petugas.
+- `PUT /api/admin/account-config` hanya menyimpan draf akun yang dipilih. `POST /api/admin/account-config/publish` memvalidasi bundle, menaikkan sequence milik akun itu, menandatangani bundle dengan `AITQR_ADMIN_KEY`, dan memakai compare-and-swap agar dua publikasi bersamaan tidak saling menimpa.
+- `GET /api/account/config` mengambil ID akun dari sesi server yang sudah diverifikasi; klien tidak dapat meminta konfigurasi akun lain dengan mengganti parameter.
+- Browser memverifikasi signature dan menyimpan cache offline dengan key yang mengandung ID akun. Service worker melewatkan seluruh `/api/*` secara network-only; Cache API bersama tidak pernah menyimpan respons yang terikat cookie.
+- `settings.decoder_secret` tetap merupakan secret platform yang hanya digunakan Worker untuk verifikasi token decoder; field/profil/penerima tetap ada pada konfigurasi per akun.
+
 ## 4. Aliran data
 
 ```mermaid
 sequenceDiagram
   participant SW as Service worker
+  participant W as Worker + D1
   participant C as config
   participant K as keys
   participant CAP as capability
@@ -82,8 +94,13 @@ sequenceDiagram
   participant P as profile/payload
   participant M as mq2 (Metaqr)
   participant Q as qr
-  SW-->>C: bundel bawaan/cached
-  C->>C: verifikasi tanda tangan + seq
+  Op->>W: login /api/login
+  W-->>Op: sesi akun terautentikasi
+  SW->>W: GET /api/account/config (cookie sesi)
+  W->>W: pilih published_source dari ID akun sesi
+  W-->>SW: bundle akun bertanda tangan, private no-store
+  SW-->>C: respons jaringan (API tidak masuk Cache API bersama)
+  C->>C: verifikasi tanda tangan + seq per akun / cache lokal bernamespace akun
   CAP->>CAP: uji Ed25519, X25519, deflate-raw, IndexedDB
   CAP-->>Op: lulus / blokir dengan alasan
   K->>K: loadOrCreateDeviceSigner
@@ -141,11 +158,12 @@ Gagal → layar blokir menyebut kapabilitas yang kurang dan versi browser; **tid
 
 ## 8. PWA dan offline
 
-- Service worker precache cangkang aplikasi + bundel; cache berversi `aitqr-<build>`.
-- Pembaruan: SW baru menunggu; pengguna diminta memuat ulang di antara penerbitan, tidak pernah mengganti kode di tengah sesi.
+- Service worker precache cangkang aplikasi dan aset statis; cache berversi `aitqr-<build>`. Bundle petugas bukan aset static bersama.
+- Seluruh `/api/*` dilewatkan langsung ke jaringan dengan `cache: no-store`; respons API ber-cookie tidak pernah ditulis ke Cache API yang tidak membedakan akun.
+- Bundle terbit disimpan di localStorage setelah signature diverifikasi, memakai cache key yang memuat ID akun. Mode offline hanya boleh memakai bundle terverifikasi terakhir milik akun yang sama; akun tanpa cache sendiri diblokir sampai konfigurasi diambil online.
 - CSP ketat: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'`; tanpa skrip/font CDN, tanpa inline script.
 - Manifest + "Add to Home Screen" disarankan; apakah PWA terpasang mengurangi eviction IndexedDB di iOS [?] harus diuji di perangkat target.
-- Tanpa telemetri; satu-satunya jaringan adalah fetch bundel dari origin sendiri.
+- Tanpa telemetri; jaringan browser hanya ke origin sendiri untuk sesi login, konfigurasi akun, dan fungsi admin yang berizin.
 
 ## 9. Kontrak lintas repo dengan ZYB Tool
 
@@ -173,15 +191,17 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 | Operator salah isi `device_id` | Pola `device_id`, layar konfirmasi; ZYB Tool memeriksa C1 | Salah isi yang cocok dengan kamera lain |
 | Jam HP salah | `iat` hanya klaim; konsumen memeriksa toleransi | — |
 | HP hilang/dipinjam | Revoke `kid`; kunci per perangkat, bukan per orang | Pemakaian bersama tercatat sebagai satu identitas |
-| Kebocoran daftar pilihan | Tidak menaruh data pribadi di bundel; kontrol akses hosting (D1) | Info organisasi bocor |
+| Kebocoran konfigurasi akun | Endpoint sesi-terautentikasi memilih row D1 berdasarkan user ID sesi; `private, no-store`; service worker tidak cache `/api/*` | Admin account atau XSS tetap berisiko |
 | Eviction kunci | Deteksi `created=true` + riwayat; blokir bila tak persisten | Kehilangan kunci sebelum disadari |
 
 ## 11. Deployment
 
-- **Hosting:** HTTPS statis; pemilik sudah memakai Vercel untuk alat lain [A: kandidat]; akses dapat dibatasi (D1). Secure context wajib untuk WebCrypto [F].
-- **Build:** deterministik (lockfile, versi pin); artefak rilis dengan hash dicatat.
-- **Pemisahan tugas:** penandatanganan bundel dilakukan offline di PC admin (`tools/sign-bundle`); kredensial deploy tidak dapat menandatangani. Memperbarui daftar/profil tidak butuh rilis aplikasi, hanya bundel baru.
-- **Pendaftaran perangkat:** operator mengirim kode pendaftaran ke admin; admin menambah allowlist ZYB Tool.
+- **Hosting:** HTTPS untuk PWA + Cloudflare Worker/Freebuff Sites untuk API, dengan D1 sebagai penyimpanan akun dan konfigurasi. Secure context wajib untuk WebCrypto [F].
+- **Binding Worker:** `DB`, `ASSETS`, `APP_ORIGIN`; secret runtime `AITQR_ADMIN_KEY`, `AITQR_SESSION_KEY`, dan `AITQR_SETUP_CODE` di dashboard hosting, tidak pernah di repo atau bundle.
+- **Signing bundle:** Worker menandatangani setiap bundle akun saat publikasi dengan secret `AITQR_ADMIN_KEY`; public key yang sesuai tertanam di `src/config/trustedAdminKeys.ts`. Kunci privat akun petugas tetap di perangkat dan tidak dikirim ke Worker.
+- **Build:** deterministik (lockfile, versi pin); `npm run build` menghasilkan PWA di `dist/` dan Worker di `server/worker.js`.
+- **Pemisahan tugas:** rilis kode aplikasi terpisah dari perubahan field akun. Administrator menyimpan lalu menerbitkan hanya akun terpilih; petugas mendapat bundle baru saat memuat ulang/refresh konfigurasi.
+- **Pendaftaran perangkat:** administrator mencatat public key akun dan memperbarui allowlist konsumen sesuai proses ZYB Tool.
 
 ## 12. Pengujian
 

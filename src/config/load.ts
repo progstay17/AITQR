@@ -4,6 +4,7 @@ import { validateProfile } from "../profile.js";
 import type { Bundle, ConfigState, SignedBundle, TrustedAdminKey } from "../types.js";
 
 const CACHE_KEY = "aitqr.bundle.v1";
+const ACCOUNT_CONFIG_URL = "/api/account/config";
 const BUILTIN_URL = "/bundles/default.bundle.json";
 const UPDATE_URL = "/bundles/latest.bundle.json";
 
@@ -22,9 +23,9 @@ export class ConfigUnavailableError extends Error {
   }
 }
 
-function readCache(): CacheEntry | null {
+function readCache(key = CACHE_KEY): CacheEntry | null {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CacheEntry;
     if (!parsed || typeof parsed !== "object" || !parsed.signed) return null;
@@ -34,9 +35,9 @@ function readCache(): CacheEntry | null {
   }
 }
 
-function writeCache(signed: SignedBundle): void {
+function writeCache(signed: SignedBundle, key = CACHE_KEY): void {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ signed, verifiedAt: Date.now() } satisfies CacheEntry));
+    localStorage.setItem(key, JSON.stringify({ signed, verifiedAt: Date.now() } satisfies CacheEntry));
   } catch {
     // A full or blocked storage must not stop issuance: the built-in bundle still applies.
   }
@@ -48,6 +49,20 @@ async function fetchBundle(url: string): Promise<unknown | null> {
     if (!response.ok) return null;
     return (await response.json()) as unknown;
   } catch {
+    return null;
+  }
+}
+
+async function fetchAccountBundle(): Promise<unknown | null> {
+  try {
+    const response = await fetch(ACCOUNT_CONFIG_URL, { cache: "no-store", credentials: "same-origin" });
+    if (response.status === 401 || response.status === 403) {
+      throw new ConfigUnavailableError("session is no longer authorised to load this account configuration", "authentication-required");
+    }
+    if (!response.ok) return null;
+    return (await response.json()) as unknown;
+  } catch (error) {
+    if (error instanceof ConfigUnavailableError) throw error;
     return null;
   }
 }
@@ -70,9 +85,63 @@ function profileProblems(bundle: Bundle): string[] {
  *   3. try a same-origin update, accepted only if its `seq` is not older than what we hold.
  * A rejected update keeps the last valid configuration and reports why (PRD FR-01, AC-02).
  */
-export async function loadConfig(options: { trusted?: TrustedAdminKey[] } = {}): Promise<ConfigState> {
+async function loadAccountConfig(accountId: string, trusted: TrustedAdminKey[], offline: boolean): Promise<ConfigState> {
+  if (!accountId.trim()) throw new ConfigUnavailableError("account identity is missing", "account-missing");
+  const cacheKey = CACHE_KEY + ".account." + encodeURIComponent(accountId);
+  const cached = readCache(cacheKey);
+  let cachedState: ConfigState | null = null;
+
+  if (cached) {
+    const checked = await verifySignedBundle(cached.signed, trusted);
+    if (checked.ok && profileProblems(checked.bundle).length === 0) {
+      cachedState = { bundle: checked.bundle, source: "cached", offline };
+    }
+  }
+
+  if (!offline) {
+    const remoteRaw = await fetchAccountBundle();
+    if (remoteRaw !== null) {
+      const checked = await verifySignedBundle(remoteRaw, trusted);
+      if (!checked.ok) {
+        if (cachedState) return { ...cachedState, updateError: checked.reason };
+        throw new ConfigUnavailableError("account configuration is not trusted: " + checked.reason, checked.code);
+      }
+      const problems = profileProblems(checked.bundle);
+      if (problems.length > 0) {
+        if (cachedState) return { ...cachedState, updateError: "account configuration is invalid: " + problems.join("; ") };
+        throw new ConfigUnavailableError("account configuration is invalid: " + problems.join("; "), "invalid-profile");
+      }
+      if (cachedState && checked.bundle.seq < cachedState.bundle.seq) {
+        return { ...cachedState, updateError: "server returned an older account configuration; the last verified version is still in use" };
+      }
+      writeCache(remoteRaw as SignedBundle, cacheKey);
+      return { bundle: checked.bundle, source: "remote", offline: false };
+    }
+  }
+
+  if (cachedState) {
+    return {
+      ...cachedState,
+      offline: true,
+      updateError: offline ? undefined : "account configuration could not be refreshed; using this account's last verified copy",
+    };
+  }
+
+  throw new ConfigUnavailableError(
+    "no verified configuration is available for this account; connect to the server and ask the administrator to publish its form",
+    "account-config-unavailable",
+  );
+}
+
+/**
+ * Load a trusted configuration:
+ *   - staff/admin sessions use a separately signed, account-scoped configuration and cache,
+ *   - the legacy global loader remains for tooling and public bundle checks.
+ */
+export async function loadConfig(options: { trusted?: TrustedAdminKey[]; account?: string } = {}): Promise<ConfigState> {
   const trusted = options.trusted ?? TRUSTED_ADMIN_KEYS;
   const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (options.account !== undefined) return loadAccountConfig(options.account, trusted, offline);
 
   const builtinRaw = await fetchBundle(BUILTIN_URL);
   if (builtinRaw === null) {

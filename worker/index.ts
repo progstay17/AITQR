@@ -96,6 +96,15 @@ const SCHEMA = [
      updated_at INTEGER NOT NULL,
      updated_by TEXT
    )`,
+  `CREATE TABLE IF NOT EXISTS account_configs (
+     user_id TEXT PRIMARY KEY,
+     draft_source TEXT NOT NULL,
+     published_source TEXT NOT NULL,
+     draft_updated_at INTEGER NOT NULL,
+     draft_updated_by TEXT,
+     published_at INTEGER NOT NULL,
+     published_seq INTEGER NOT NULL DEFAULT 1
+   )`,
   `CREATE TABLE IF NOT EXISTS settings (
      key TEXT PRIMARY KEY,
      value TEXT NOT NULL,
@@ -129,12 +138,46 @@ async function ensureSchema(env: Env): Promise<void> {
           .bind(seed.bundle.seq, JSON.stringify(seed), Date.now(), "seed", "bundled default")
           .run();
       }
+      const users = await env.DB.prepare("SELECT id FROM users").all<{ id: string }>();
+      for (const account of users.results) await ensureAccountConfig(env, account.id, "migration");
     })().catch((error) => {
       schemaReady = undefined;
       throw error;
     });
   }
   return schemaReady;
+}
+
+async function accountBundleTemplate(env: Env): Promise<Bundle> {
+  // Preserve the existing global draft as the starting template during migration and for new accounts.
+  const legacyDraft = await env.DB.prepare("SELECT source FROM bundle_draft WHERE id = 1").first<{ source: string }>();
+  const latest = await env.DB.prepare("SELECT signed FROM bundle_versions ORDER BY seq DESC LIMIT 1").first<{
+    signed: string;
+  }>();
+  const source = legacyDraft
+    ? (JSON.parse(legacyDraft.source) as Bundle)
+    : latest
+      ? (JSON.parse(latest.signed) as SignedBundle).bundle
+      : (defaultSigned as unknown as SignedBundle).bundle;
+  const bundle = JSON.parse(JSON.stringify(source)) as Bundle;
+  bundle.seq = 1;
+  bundle.issued = new Date().toISOString();
+  return bundle;
+}
+
+async function ensureAccountConfig(env: Env, userId: string, actor: string): Promise<void> {
+  const existing = await env.DB.prepare("SELECT user_id FROM account_configs WHERE user_id = ?")
+    .bind(userId)
+    .first<{ user_id: string }>();
+  if (existing) return;
+  const bundle = await accountBundleTemplate(env);
+  const now = Date.now();
+  const source = JSON.stringify(bundle);
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO account_configs (user_id, draft_source, published_source, draft_updated_at, draft_updated_by, published_at, published_seq) VALUES (?, ?, ?, ?, ?, ?, 1)",
+  )
+    .bind(userId, source, source, now, actor, now)
+    .run();
 }
 
 async function log(env: Env, actor: string, action: string, detail: string): Promise<void> {
@@ -362,6 +405,7 @@ export default {
         )
           .bind(id, username, username, await hashPassword(password, pbkdf2Iterations(env.AITQR_PBKDF2_ITERATIONS)), Date.now())
           .run();
+        await ensureAccountConfig(env, id, username);
         await log(env, username, "admin.bootstrap", "first administrator");
         const cookie = await createSessionCookie(env, username);
         return json({ ok: true, user: { username, role: "admin" } }, { headers: { "Set-Cookie": cookie } });
@@ -420,6 +464,37 @@ export default {
       if (!user) return fail("Masuk terlebih dahulu.", 401);
       if (req.method !== "GET" && !isSameOrigin(req, env)) return new Response(null, { status: 403 });
 
+      if (path === "/api/account/config") {
+        if (req.method !== "GET") return fail("Method not allowed", 405);
+        const row = await env.DB.prepare(
+          "SELECT published_source, published_at, published_seq FROM account_configs WHERE user_id = ?",
+        )
+          .bind(user.id)
+          .first<{ published_source: string; published_at: number; published_seq: number }>();
+        if (!row) return fail("Konfigurasi akun belum tersedia. Hubungi administrator.", 409);
+        let source: unknown;
+        try {
+          source = JSON.parse(row.published_source);
+        } catch {
+          return fail("Konfigurasi akun tersimpan rusak. Hubungi administrator.", 503);
+        }
+        const checked = validateSource(source);
+        if ("problems" in checked) return json({ error: "Konfigurasi akun tidak valid.", problems: checked.problems }, { status: 503 });
+        const seed = env.AITQR_ADMIN_KEY?.trim() ?? "";
+        if (!/^[0-9a-fA-F]{64}$/.test(seed)) return fail("Kunci penandatangan konfigurasi belum tersedia.", 503);
+        const bundle: Bundle = {
+          ...checked.bundle,
+          seq: Number(row.published_seq),
+          issued: new Date(Number(row.published_at)).toISOString(),
+        };
+        try {
+          const signed = await signWithKey(bundle, seed);
+          return json(signed, { headers: { "Cache-Control": "private, no-store", Vary: "Cookie" } });
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : "Gagal menandatangani konfigurasi akun.", 503);
+        }
+      }
+
       if (path === "/api/password") {
         if (req.method !== "POST") return fail("Method not allowed", 405);
         const body = (await req.json().catch(() => null)) as { current?: string; next?: string } | null;
@@ -447,6 +522,17 @@ export default {
         const users = await env.DB.prepare(
           "SELECT id, username, display_name, role, public_key, kid, status, created_at, last_seen_at FROM users ORDER BY created_at",
         ).all<Omit<UserRow, "password_hash" | "failed" | "locked_until">>();
+        const accountConfigs = await env.DB.prepare(
+          "SELECT c.user_id, c.draft_source, c.draft_updated_at, c.draft_updated_by, c.published_at, c.published_seq " +
+            "FROM account_configs c INNER JOIN users u ON u.id = c.user_id ORDER BY u.created_at",
+        ).all<{
+          user_id: string;
+          draft_source: string;
+          draft_updated_at: number;
+          draft_updated_by: string | null;
+          published_at: number;
+          published_seq: number;
+        }>();
         const audit = await env.DB.prepare("SELECT at, actor, action, detail FROM audit ORDER BY id DESC LIMIT 40").all<{
           at: number;
           actor: string | null;
@@ -470,6 +556,14 @@ export default {
             status: row.status,
             createdAt: row.created_at,
             lastSeenAt: row.last_seen_at,
+          })),
+          accountConfigs: accountConfigs.results.map((row) => ({
+            userId: row.user_id,
+            draftSource: row.draft_source,
+            updatedAt: row.draft_updated_at,
+            updatedBy: row.draft_updated_by,
+            publishedAt: row.published_at,
+            publishedSeq: row.published_seq,
           })),
           audit: audit.results,
           keys: {
@@ -510,7 +604,8 @@ export default {
               now,
             )
             .run();
-          await log(env, user.username, "user.create", `${username} role=${role}`);
+          await ensureAccountConfig(env, id, user.username);
+          await log(env, user.username, "user.create", username + " role=" + role);
           return json({ ok: true, id });
         }
 
@@ -560,12 +655,91 @@ export default {
           if (target.role === "admin" && (await adminCount(env)) <= 1) {
             return fail("Minimal satu administrator harus tersisa.", 409);
           }
+          await env.DB.prepare("DELETE FROM account_configs WHERE user_id = ?").bind(target.id).run();
           await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(target.id).run();
           await log(env, user.username, "user.delete", target.username);
           return json({ ok: true });
         }
 
         return fail("action harus create, update, password, atau delete.");
+      }
+
+      if (path === "/api/admin/account-config") {
+        if (req.method !== "PUT") return fail("Method not allowed", 405);
+        const body = (await req.json().catch(() => null)) as { accountId?: string; source?: unknown } | null;
+        const accountId = String(body?.accountId ?? "");
+        if (!accountId || body?.source === undefined) return fail("Body harus berisi accountId dan source.");
+        const target = await env.DB.prepare("SELECT id, username FROM users WHERE id = ?")
+          .bind(accountId)
+          .first<{ id: string; username: string }>();
+        if (!target) return fail("Akun tidak ditemukan.", 404);
+        const accountConfig = await env.DB.prepare("SELECT user_id FROM account_configs WHERE user_id = ?")
+          .bind(accountId)
+          .first<{ user_id: string }>();
+        if (!accountConfig) return fail("Konfigurasi akun belum tersedia. Muat ulang konsol admin.", 409);
+        let parsed: unknown = body.source;
+        if (typeof parsed === "string") {
+          try {
+            parsed = JSON.parse(parsed);
+          } catch {
+            return fail("Draf akun bukan JSON yang valid.", 422);
+          }
+        }
+        const checked = validateSource(parsed);
+        if ("problems" in checked) return json({ problems: checked.problems }, { status: 422 });
+        if (checked.bundle.profiles.length === 0) return fail("Minimal satu profil harus tersedia untuk akun ini.", 422);
+        const now = Date.now();
+        await env.DB.prepare(
+          "UPDATE account_configs SET draft_source = ?, draft_updated_at = ?, draft_updated_by = ? WHERE user_id = ?",
+        )
+          .bind(JSON.stringify(checked.bundle, null, 2), now, user.username, accountId)
+          .run();
+        await log(env, user.username, "account.config.draft", target.username + " profiles=" + checked.bundle.profiles.length);
+        return json({ ok: true, accountId });
+      }
+
+      if (path === "/api/admin/account-config/publish") {
+        if (req.method !== "POST") return fail("Method not allowed", 405);
+        const body = (await req.json().catch(() => null)) as { accountId?: string } | null;
+        const accountId = String(body?.accountId ?? "");
+        if (!accountId) return fail("accountId wajib diisi.");
+        const row = await env.DB.prepare(
+          "SELECT c.draft_source, c.published_seq, u.username FROM account_configs c " +
+            "INNER JOIN users u ON u.id = c.user_id WHERE c.user_id = ?",
+        )
+          .bind(accountId)
+          .first<{ draft_source: string; published_seq: number; username: string }>();
+        if (!row) return fail("Konfigurasi akun tidak ditemukan.", 404);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(row.draft_source);
+        } catch {
+          return fail("Draf akun tersimpan rusak.", 422);
+        }
+        const checked = validateSource(parsed);
+        if ("problems" in checked) return json({ problems: checked.problems }, { status: 422 });
+        if (checked.bundle.profiles.length === 0) return fail("Minimal satu profil harus tersedia untuk akun ini.", 422);
+        const seed = env.AITQR_ADMIN_KEY?.trim() ?? "";
+        if (!/^[0-9a-fA-F]{64}$/.test(seed)) return fail("AITQR_ADMIN_KEY belum dikonfigurasi.", 503);
+        const nextSeq = Number(row.published_seq) + 1;
+        const publishedAt = Date.now();
+        const bundle: Bundle = { ...checked.bundle, seq: nextSeq, issued: new Date(publishedAt).toISOString() };
+        let signed: SignedBundle;
+        try {
+          signed = await signWithKey(bundle, seed);
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : "Gagal menandatangani konfigurasi akun.", 503);
+        }
+        const update = await env.DB.prepare(
+          "UPDATE account_configs SET published_source = ?, published_at = ?, published_seq = ? WHERE user_id = ? AND published_seq = ?",
+        )
+          .bind(JSON.stringify(bundle, null, 2), publishedAt, nextSeq, accountId, row.published_seq)
+          .run();
+        if (update.meta.changes !== 1) {
+          return fail("Konfigurasi akun berubah saat publikasi. Muat ulang draf lalu coba lagi.", 409);
+        }
+        await log(env, user.username, "account.config.publish", row.username + " seq=" + nextSeq + " kid=" + signed.sig.kid);
+        return json({ ok: true, accountId, seq: nextSeq, kid: signed.sig.kid });
       }
 
       if (path === "/api/admin/bundle") {

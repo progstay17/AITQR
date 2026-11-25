@@ -1,6 +1,6 @@
 # AITQR — Product Requirements Document
 
-Status: **DRAFT menunggu persetujuan** · Tanggal: 2026-11-25 · Tidak ada kode pada tahap ini.
+Status: **DRAFT menunggu persetujuan** · Tanggal: 2026-11-25 · Snapshot implementasi tersedia di repo dan berstatus **WIP**, belum dinyatakan production-ready.
 Repo GitHub: https://github.com/progstay17/AITQR (terpisah dari repo ZYBTool).
 
 Legenda: **[F]** fakta terverifikasi · **[A]** asumsi · **[?]** belum terverifikasi (harus diuji sebelum dipakai).
@@ -16,7 +16,7 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 
 **Goals**
 1. Web/PWA responsif yang menghasilkan QR MQ2 dari **profil** konfigurasi, tanpa perubahan kode untuk alat atau field baru.
-2. **Konfigurasi global** (pengaturan aplikasi) dan **profil per alat** (form, skema payload, penerima/decoder) yang dapat dipasangkan ke berbagai alat.
+2. **Pengaturan platform global** dan **konfigurasi form/profil per akun**. Setiap akun memiliki field, daftar opsi, profil, penerima/decoder, draf, serta publikasi yang terisolasi dari akun lain.
 3. Konfigurasi didistribusikan sebagai bundel yang ditandatangani admin; HP menolak konfigurasi tak sah.
 4. Manajemen kunci perangkat yang aman di browser, dengan alur pendaftaran ke allowlist alat.
 5. Berjalan offline setelah dimuat sekali.
@@ -24,8 +24,8 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 
 **Non-goals**
 - Memverifikasi atau men-decode QR (tugas tiap alat konsumen; kunci privat decoder tidak pernah masuk AITQR).
-- Backend penyimpanan data operasional; tidak ada akun/login pada MVP.
-- Backend signing (melemahkan bukti identitas perangkat; hanya dipertimbangkan jika diputuskan eksplisit).
+- Penyimpanan riwayat operasional petugas di backend; riwayat penerbitan tetap lokal pada perangkat. D1 menyimpan akun, konfigurasi profil, audit administratif, dan kunci decoder yang dikelola admin.
+- Backend signing untuk QR petugas. QR tetap ditandatangani di browser oleh kunci akun; Worker hanya menandatangani bundel konfigurasi admin.
 - Membuktikan identitas orang pemegang HP (hanya perangkat penanda tangan).
 - Membuat ulang kriptografi; memakai encoder JS Metaqr.
 
@@ -41,10 +41,10 @@ Konsumen pertama adalah **ZYB Tool** (`ZYBTool/PRD.md`). AITQR sengaja **tidak m
 
 ```mermaid
 flowchart LR
-  A[Admin tulis profil + daftar pilihan] --> B[Admin tanda tangani bundel konfigurasi]
-  B --> C[Bundel di-host statis / dibundel dengan aplikasi]
-  C --> D[HP memuat + verifikasi tanda tangan bundel]
-  D --> E[Petugas pilih profil dan isi form]
+  A[Admin pilih akun lalu edit profil + daftar pilihan] --> B[Simpan draf dan terbitkan untuk akun terpilih]
+  B --> C[Worker simpan bundle bertanda tangan per akun]
+  C --> D[HP login dan mengambil bundle milik akunnya]
+  D --> E[HP verifikasi tanda tangan; petugas pilih profil dan isi form]
   E --> F[Validasi + susun payload + cek anggaran ukuran]
   F --> G[Encode MQ2: tanda tangan kunci perangkat, enkripsi ke decoder]
   G --> H[Tampilkan QR layar penuh]
@@ -53,11 +53,15 @@ flowchart LR
 
 ## 5. Model konfigurasi (inti produk)
 
-Dua tingkat, keduanya JSON ber-versi dan ditandatangani sebagai satu **bundel**.
+Konfigurasi dipisah menurut kepemilikan:
 
-**Pengaturan global** (berlaku untuk semua profil): bahasa, tema, sumber bundel dan kebijakan pembaruan, daftar kunci publik admin yang dipercaya, kebijakan kunci perangkat, default tampilan QR, daftar profil yang diizinkan.
+**Pengaturan platform global**: bahasa/tema default, kunci publik admin tepercaya, kebijakan keamanan perangkat, serta kebijakan pembaruan aplikasi. Pengaturan ini tidak menjadi tempat menyimpan field operasional petugas.
 
-**Profil** (satu per alat/kegunaan): `id` + `version`, judul, `consumer` (id alat), `recipient` (kid/kunci publik decoder), `schema_id`, daftar `fields`, `derived` (field otomatis), `payload` (pemetaan field → payload), batasan, opsi render QR.
+**Konfigurasi per akun**: setiap akun mempunyai salinan bundle sendiri yang mencakup profil, `fields`, `lists`, `derived`, `payload`, penerima/decoder, batasan, dan opsi render QR. Administrator memilih akun di konsol, mengubah draf akun itu, menyimpan, lalu menerbitkan hanya untuk akun tersebut. Setiap akun mempunyai `published_seq` sendiri.
+
+Akun baru menyalin template awal satu kali. Pada migrasi, akun lama menyalin draf global yang sudah ada satu kali agar pekerjaan admin sebelumnya tidak hilang. Setelah itu, semua salinan independen: perubahan field, daftar pilihan, atau profil akun A tidak mengubah akun B. Draf yang belum diterbitkan tidak dikirim ke petugas.
+
+Setiap bundle yang diterbitkan ditandatangani Ed25519. Petugas mengambil bundle melalui endpoint autentikasi yang memilih konfigurasi dari ID akun di sesi server. Klien memverifikasi signature dan menyimpan cache offline dengan namespace ID akun; service worker tidak menyimpan respons API terautentikasi ke cache bersama.
 
 Tipe field: `text`, `select` (opsi dari daftar), `number`, `datetime`, `device_id`, `checkbox`, `constant`, `computed`. Daftar pilihan (`lists`) dapat diperbarui tanpa merilis ulang aplikasi.
 
@@ -90,7 +94,7 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 
 | ID | Kebutuhan |
 |---|---|
-| FR-01 | Muat bundel konfigurasi (bawaan + pembaruan jarak jauh), verifikasi tanda tangan admin, cache untuk offline. Bundel tak sah ditolak; tidak ada fallback diam-diam. |
+| FR-01 | Muat bundle terbit milik akun yang sedang login lewat endpoint terautentikasi; verifikasi tanda tangan admin dan anti-rollback per akun; cache offline dipisah per ID akun. Bundle tak sah ditolak. |
 | FR-02 | Render form dari profil; validasi (wajib, panjang, pola, opsi); tampilkan galat jelas. |
 | FR-03 | Field turunan otomatis: `session_id` unik, waktu perangkat; operator tidak dapat mengubahnya. |
 | FR-04 | Susun payload sesuai profil, hitung anggaran ukuran token (batas MQ2) dan blokir jika terlampaui, tampilkan sisa. |
@@ -100,7 +104,7 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 | FR-08 | Deteksi kapabilitas WebCrypto (Ed25519, X25519) saat mulai; bila tidak didukung, **blokir dengan pesan jelas**, tidak ada penurunan ke token tak bertanda tangan. |
 | FR-09 | Riwayat penerbitan lokal di perangkat (session_id, profil, waktu); tidak dikirim ke mana pun. |
 | FR-10 | PWA offline; bahasa Indonesia dan Inggris. |
-| FR-11 | Alat admin (CLI/halaman): lint profil, hitung anggaran payload, tanda tangani bundel, hasilkan vektor uji bersama dengan konsumen. |
+| FR-11 | Konsol admin menyediakan CRUD akun dan editor profil/field/daftar opsi per akun; simpan draf dan terbitkan konfigurasi hanya untuk akun terpilih, selain alat lint, anggaran, signing, dan vektor uji. |
 
 ## 7. Kebutuhan non-fungsional
 
@@ -134,6 +138,7 @@ Contoh profil (ilustrasi untuk ZYB Tool; **bukan skema final**, kontrak final di
 | AC-08 | Browser tanpa dukungan kripto yang dibutuhkan menampilkan pesan blokir, tanpa QR. |
 | AC-09 | Dua penerbitan berurutan menghasilkan `session_id` berbeda. |
 | AC-10 | Profil ZYB (`zyb-recording`) menghasilkan payload yang lolos validasi skema ZYB Tool. |
+| AC-11 | Dua akun memiliki field dan daftar opsi berbeda; menyimpan/menerbitkan akun A tidak mengubah draft/publikasi akun B, dan setiap sesi hanya menerima bundle akun sendiri. |
 
 ## 10. Edge case dan penanganan kegagalan
 

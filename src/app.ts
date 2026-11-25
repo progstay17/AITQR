@@ -154,7 +154,7 @@ async function boot(): Promise<void> {
     return;
   }
 
-  const config = await loadConfig({ trusted: TRUSTED_ADMIN_KEYS }).catch((error: unknown) => {
+  const config = await loadConfig({ trusted: TRUSTED_ADMIN_KEYS, account: session.user.id }).catch((error: unknown) => {
     state.configError =
       error instanceof ConfigUnavailableError ? error.message : error instanceof Error ? error.message : String(error);
     return null;

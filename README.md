@@ -19,11 +19,12 @@ npm start                  # pratinjau statis http://0.0.0.0:3000
 npx wrangler dev --port 8787 --local   # Worker + D1 lokal lengkap (login, admin)
 ```
 
-Pemeriksaan:
+Pemeriksaan (jalankan build sebelum test karena test Worker memakai hasil bundle lokal):
 
 ```bash
 npm run typecheck          # tsc --noEmit untuk aplikasi + Worker
-npm test                   # node --test (unit, Node) — tidak butuh file kunci
+npm run build              # siapkan dist/app dan server/worker.js untuk test integrasi
+npm test                   # unit + integrasi Worker/D1 (node:sqlite), tidak butuh secret produksi
 npm run bundle:lint        # validasi bundel + profil
 npm run bundle:budget      # panjang token MQ2 nyata per profil
 ```
@@ -68,22 +69,33 @@ secret belum diset `503`.
 | Rute | Akses | Fungsi |
 |---|---|---|
 | `GET /`, `/admin` | publik | Shell aplikasi petugas dan konsol admin |
-| `GET /bundles/latest.bundle.json` | publik | Bundel konfigurasi terbit (bertanda tangan) |
 | `GET /api/health` | publik | Status secret, jumlah admin/user, `publishedSeq` |
 | `GET /api/session` | publik | Sesi saat ini (`signedIn`, user) |
 | `POST /api/bootstrap` | kode setup | Buat administrator pertama (409 bila sudah ada) |
 | `POST /api/login` | publik | Login username + kata sandi, set cookie `aitqr_session` |
 | `POST /api/logout` | sesi | Hapus cookie sesi |
 | `POST /api/password` | sesi | Ganti kata sandi sendiri |
-| `GET /api/admin/state` | admin | Akun, draf bundel, kunci, konfigurasi |
+| `GET /api/account/config` | akun aktif | Bundel profil terbit khusus akun yang sedang login |
+| `GET /api/admin/state` | admin | Akun, draf/publikasi per akun, audit, status kunci |
 | `* /api/admin/users` | admin | CRUD akun (public key, reset sandi, aktif/nonaktif) |
-| `* /api/admin/bundle` | admin | Simpan draf bundel |
-| `POST /api/admin/publish` | admin | Tanda tangan + terbitkan bundel (`seq` naik) |
-| `* /api/admin/keys` | admin | Public key penerima, kunci rahasia decoder |
+| `PUT /api/admin/account-config` | admin | Simpan draf field dan profil untuk satu akun |
+| `POST /api/admin/account-config/publish` | admin | Tanda tangani dan terbitkan hanya untuk akun terpilih |
+| `* /api/admin/keys` | admin | Public key penerima per profil, kunci rahasia decoder |
+| `GET /bundles/latest.bundle.json` | publik | Bundel template/kompatibilitas; tidak dipakai untuk konfigurasi petugas per akun |
 | `POST /api/admin/verify` | admin | Verifikasi token MQ2 |
 | `GET /api/admin/allowlist` | admin | Unduh allowlist akun |
 
 Tanpa sesi, rute `/api/admin/*` menjawab `401`; akun non-admin `403`; mutasi lintas-origin `403`.
+
+## Konfigurasi field per akun
+
+Konsol admin memiliki pemilih akun. Administrator memilih satu akun lalu mengatur profil, field, label Indonesia/Inggris, tipe field, validasi, grup form, daftar opsi, dan public key penerima untuk akun tersebut. Tombol **Simpan draf akun** hanya menyimpan draf milik akun terpilih; **Terbitkan untuk akun ini** hanya memperbarui publikasi akun itu. Perubahan belum tersimpan harus disimpan sebelum dapat diterbitkan.
+
+Setiap akun memiliki satu baris mandiri di tabel D1 `account_configs` dengan `draft_source`, `published_source`, waktu perubahan, dan `published_seq` sendiri. Akun baru mendapat salinan template awal; akun yang sudah ada saat migrasi mendapat salinan draf global lama satu kali. Setelah penyalinan, tidak ada referensi bersama: mengubah field, daftar, profil, atau kunci penerima akun A tidak mengubah akun B.
+
+Aplikasi petugas mengambil konfigurasi melalui `GET /api/account/config`. Worker memilih konfigurasi berdasarkan ID akun dari sesi yang telah diverifikasi, bukan ID yang dikirim oleh browser. Bundel ditandatangani Ed25519 dan diverifikasi di klien. Cache offline memakai key yang mengandung ID akun; service worker tidak menyimpan respons `/api/*` di Cache API bersama karena cache itu tidak dipisahkan menurut cookie. Dengan demikian, sesi akun lain tidak dapat memakai respons API yang tertinggal dari akun sebelumnya.
+
+`bundle_draft` dan `bundle_versions` lama dipertahankan sebagai template awal/kompatibilitas; keduanya bukan sumber form petugas setelah akun dibuat.
 
 ## Struktur
 
@@ -131,10 +143,10 @@ administrator pertama). `keys/` (git-ignored) menyimpan salinan lokal untuk peng
 | Kemampuan | Keterangan |
 |---|---|
 | Akun | Buat akun (username, kata sandi, public key, peran), ubah public key, reset kata sandi, aktif/nonaktif, hapus |
-| Kolom metadata | Kunci field, tipe, label ID/EN, wajib, maks panjang, pola, grup, daftar opsi |
-| Kunci | Public key penerima per profil, kunci rahasia decoder |
-| Verifikasi | Tempel token MQ2 → server membuka dengan kunci rahasia decoder, mencari akun lewat `kid`, memeriksa tanda tangan |
-| Publikasi | Simpan draf, naikkan `seq`, tanda tangan bundel di server |
+| Kolom metadata | Pilih akun target; atur field, tipe, label ID/EN, wajib, batas panjang, pola, grup, dan daftar opsi hanya untuk akun tersebut |
+| Kunci | Public key penerima di profil akun terpilih; kunci rahasia decoder dikelola sebagai secret platform |
+| Verifikasi | Tempel token MQ2 → Worker membuka dengan kunci rahasia decoder, mencari akun lewat `kid`, memeriksa tanda tangan |
+| Publikasi | Simpan draft akun; tandatangani dan naikkan sequence hanya untuk akun terpilih |
 | Allowlist | Unduh `allowlist.json` dari akun yang punya public key |
 
 - Tanpa sesi, API admin menjawab 401; akun non-admin 403; mutasi lintas-origin 403.
@@ -144,10 +156,9 @@ administrator pertama). `keys/` (git-ignored) menyimpan salinan lokal untuk peng
 
 ## Memperbarui konfigurasi
 
-Ubah di konsol admin → **Simpan draf** → **Tandatangani & terbitkan**. Aplikasi mengambil
-`/bundles/latest.bundle.json`, memverifikasi tanda tangan, dan menolak `seq` yang lebih lama.
+Pilih akun di konsol admin → ubah field/profil → **Simpan draf akun** → **Terbitkan untuk akun ini**. Aplikasi petugas mengambil `GET /api/account/config` sesuai sesi login, memverifikasi signature, dan menolak sequence yang lebih lama untuk akun tersebut. Publikasi akun lain tidak terpengaruh.
 
-Jalur CLI untuk pengembangan:
+Jalur CLI/template global lama untuk pengembangan:
 
 ```bash
 npm run bundle:lint && npm run bundle:budget && npm run bundle:sign

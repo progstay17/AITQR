@@ -62,6 +62,13 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Authenticated APIs must never enter the shared Cache API: cache keys do not vary by cookie.
+  // Account configuration has its own signature-verified, account-namespaced localStorage cache.
+  if (url.pathname.startsWith("/api/")) {
+    event.respondWith(fetch(new Request(request, { cache: "no-store" })));
+    return;
+  }
+
   // Configuration updates must reach the network when it is available.
   if (url.pathname.startsWith("/bundles/latest")) {
     event.respondWith(fetch(request).catch(() => caches.match(request)));
