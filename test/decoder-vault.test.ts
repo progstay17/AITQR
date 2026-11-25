@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { openDecoderKey, sealDecoderKey } from "../backend/decoder-vault.js";
+import { openDecoderKey, sealDecoderKey } from "../dist/app/decoder-vault.js";
 
 const master = "a".repeat(64);
 const privateKey = "0123456789abcdef".repeat(4);
