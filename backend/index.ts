@@ -376,6 +376,7 @@ export default {
           configured: {
             adminKey: /^[0-9a-fA-F]{64}$/.test(adminSeed),
             sessionKey: /^[0-9a-fA-F]{64}$/.test(env.AITQR_SESSION_KEY?.trim() ?? ""),
+            vaultKey: /^[0-9a-fA-F]{64}$/.test(env.AITQR_VAULT_MASTER_KEY?.trim() ?? ""),
           },
           adminKid,
           admins: Number(counts?.admins ?? 0),
