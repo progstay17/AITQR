@@ -71,7 +71,7 @@ async function fetchAccountBundle(): Promise<unknown | null> {
     let detail = "";
     try {
       const payload = (await response.json()) as { error?: unknown };
-      if (typeof payload?.error === "string") detail = payload.error.trim().replace(/\\s+/g, " ").slice(0, 180);
+      if (typeof payload?.error === "string") detail = payload.error.trim().replace(/\s+/g, " ").slice(0, 180);
     } catch {
       // Keep the HTTP status when the proxy returns a non-JSON error page.
     }
