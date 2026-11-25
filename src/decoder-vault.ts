@@ -35,17 +35,52 @@ function asArrayBuffer(value: Uint8Array): ArrayBuffer {
 
 export async function sealDecoderKey(privateKeyHex: string, masterKey: string, accountId: string, kid: string): Promise<{ iv: string; ciphertext: string }> {
   const raw = fromHex(privateKeyHex);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await vaultKey(masterKey);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: asArrayBuffer(iv), additionalData: asArrayBuffer(keyContext(accountId, kid)) }, key, asArrayBuffer(encoder.encode(privateKeyHex.toLowerCase()))));
-  raw.fill(0);
-  return { iv: toBase64(iv), ciphertext: toBase64(ciphertext) };
+  try {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await vaultKey(masterKey);
+    const plaintext = encoder.encode(privateKeyHex.toLowerCase());
+    try {
+      const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: asArrayBuffer(iv), additionalData: asArrayBuffer(keyContext(accountId, kid)) },
+        key,
+        asArrayBuffer(plaintext),
+      ));
+      return { iv: toBase64(iv), ciphertext: toBase64(ciphertext) };
+    } finally {
+      plaintext.fill(0);
+    }
+  } finally {
+    raw.fill(0);
+  }
 }
 
-export async function openDecoderKey(ivText: string, ciphertextText: string, masterKey: string, accountId: string, kid: string): Promise<Uint8Array> {
+export async function openDecoderKey(
+  ivText: string,
+  ciphertextText: string,
+  masterKey: string,
+  accountId: string,
+  kid: string,
+): Promise<Uint8Array> {
   const key = await vaultKey(masterKey);
-  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: asArrayBuffer(fromBase64(ivText)), additionalData: asArrayBuffer(keyContext(accountId, kid)), tagLength: 128 }, key, asArrayBuffer(fromBase64(ciphertextText)));
-  const hex = new TextDecoder().decode(plaintext);
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: asArrayBuffer(fromBase64(ivText)),
+      additionalData: asArrayBuffer(keyContext(accountId, kid)),
+      tagLength: 128,
+    },
+    key,
+    asArrayBuffer(fromBase64(ciphertextText)),
+  );
+  const bytes = new Uint8Array(plaintext);
+  try {
+    const hex = new TextDecoder().decode(bytes);
+    if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("Stored decoder key is invalid");
+    return Uint8Array.from(hex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16));
+  } finally {
+    bytes.fill(0);
+  }
+}  const hex = new TextDecoder().decode(plaintext);
   if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("Stored decoder key is invalid");
   return Uint8Array.from(hex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16));
 }
