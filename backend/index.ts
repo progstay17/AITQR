@@ -543,8 +543,10 @@ export default {
             .bind(accountId).first<{ draft_source: string; published_source: string }>();
           if (!config) return fail("Konfigurasi akun tidak ditemukan.", 404);
           let publicKey: Uint8Array;
-          try { publicKey = await webCryptoX25519.publicFromPrivate(Uint8Array.from(privateKeyHex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16))); }
+          const privateBytes = Uint8Array.from(privateKeyHex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16));
+          try { publicKey = await webCryptoX25519.publicFromPrivate(privateBytes); }
           catch { return fail("Private key tidak valid atau runtime tidak mendukung X25519.", 422); }
+          finally { privateBytes.fill(0); }
           const publicHex = bytesToHex(publicKey);
           const accepted = new Set<string>();
           for (const source of [config.published_source, config.draft_source]) {
