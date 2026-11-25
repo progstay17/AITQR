@@ -32,6 +32,7 @@ interface Session {
 type View =
   | { name: "boot" }
   | { name: "login" }
+  | { name: "session-unavailable" }
   | { name: "config-error" }
   | { name: "home" }
   | { name: "form" }
@@ -49,6 +50,7 @@ interface State {
   session: Session | null;
   config: ConfigState | null;
   configError: string | null;
+  sessionError: string | null;
   view: View;
   draft: Draft | null;
   issues: ValidationIssue[];
@@ -56,6 +58,7 @@ interface State {
   loginError: string | null;
   busy: string;
   updateReady: boolean;
+  wakeLockStatus: "idle" | "pending" | "active" | "unsupported" | "failed";
 }
 
 const state: State = {
@@ -63,6 +66,7 @@ const state: State = {
   session: null,
   config: null,
   configError: null,
+  sessionError: null,
   view: { name: "boot" },
   draft: null,
   issues: [],
@@ -70,6 +74,7 @@ const state: State = {
   loginError: null,
   busy: "",
   updateReady: false,
+  wakeLockStatus: "idle",
 };
 
 const root = (): HTMLElement => document.getElementById("main") as HTMLElement;
@@ -81,7 +86,9 @@ function profileOf(id: string): Profile | undefined {
 }
 
 function go(view: View): void {
+  const leavingQr = state.view.name === "qr" && view.name !== "qr";
   state.view = view;
+  if (leavingQr) void releaseQrWakeLock();
   render();
 }
 
@@ -133,7 +140,17 @@ async function boot(): Promise<void> {
   state.configError = null;
   render();
 
-  const session = await api<Session>("/api/session").catch<Session>(() => ({ signedIn: false, user: null }));
+  const session = await api<Session>("/api/session").catch((error: unknown) => {
+    state.sessionError = error instanceof Error ? error.message : String(error);
+    return null;
+  });
+  if (!session) {
+    state.session = null;
+    state.view = { name: "session-unavailable" };
+    render();
+    return;
+  }
+  state.sessionError = null;
   state.session = session;
 
   if (!session.signedIn || !session.user) {
@@ -234,7 +251,7 @@ function noticeBar(): HTMLElement | null {
     el("button", {
       class: "link-button",
       attrs: { type: "button" },
-      text: "脳",
+      text: "×",
       on: {
         click: () => {
           state.notice = null;
@@ -308,6 +325,17 @@ function renderLogin(): HTMLElement {
       el("p", { class: "muted", text: tr("login.body") }),
       form,
       el("p", { class: "muted small", text: tr("login.hint") }),
+    ]),
+  ]);
+}
+
+function renderSessionUnavailable(): HTMLElement {
+  return el("div", { class: "stack" }, [
+    el("section", { class: "card card-warn" }, [
+      el("h1", { class: "page-title", text: tr("session.unavailable.title") }),
+      el("p", { text: tr("session.unavailable.body") }),
+      state.sessionError ? el("p", { class: "muted small", text: state.sessionError }) : null,
+      actionButton(tr("config.retry"), () => void boot(), "primary"),
     ]),
   ]);
 }
@@ -404,10 +432,14 @@ function issueMessage(issue: ValidationIssue): string {
 }
 
 function clearIssue(key: string): void {
-  if (state.issues.some((issue) => issue.key === key)) {
-    state.issues = state.issues.filter((issue) => issue.key !== key);
-    render();
-  }
+  if (!state.issues.some((issue) => issue.key === key)) return;
+  state.issues = state.issues.filter((issue) => issue.key !== key);
+  const control = document.getElementById(fieldId(key));
+  const wrapper = control?.closest(".field");
+  wrapper?.classList.remove("field-invalid");
+  control?.removeAttribute("aria-invalid");
+  control?.removeAttribute("aria-describedby");
+  wrapper?.querySelector(".field-error")?.remove();
 }
 
 function renderField(profile: Profile, field: FieldDef): HTMLElement {
@@ -428,32 +460,68 @@ function renderField(profile: Profile, field: FieldDef): HTMLElement {
   } as Record<string, string | boolean | undefined>;
 
   let control: HTMLElement;
+  let suggestions: HTMLElement | null = null;
   switch (field.type) {
-    case "select": {
+    case "select":
+    case "device_id": {
       const options = optionsFor(field, state.config!.bundle);
-      control = el(
-        "select",
-        {
+      if (field.type === "device_id" && !field.list) {
+        control = el("input", {
           class: "input",
-          attrs: { ...common, required: field.required === true },
-          on: {
-            change: (event) => {
-              if (!draft) return;
-              draft.values[field.key] = (event.target as HTMLSelectElement).value;
-              clearIssue(field.key);
+          attrs: { ...common, type: "text", maxlength: field.max, placeholder: localize(field.placeholder, state.locale) },
+          props: { value: value === undefined ? "" : String(value) },
+          on: { input: (event) => {
+            if (!draft) return;
+            draft.values[field.key] = (event.target as HTMLInputElement).value;
+            clearIssue(field.key);
+          } },
+        });
+      } else if (options.length >= 8) {
+        const listId = `options-${id}`;
+        control = el("input", {
+          class: "input",
+          attrs: {
+            ...common,
+            type: "text",
+            list: listId,
+            required: field.required === true,
+            autocomplete: "off",
+            placeholder: tr("form.search"),
+          },
+          props: { value: value === undefined ? "" : String(value) },
+          on: { input: (event) => {
+            if (!draft) return;
+            draft.values[field.key] = (event.target as HTMLInputElement).value;
+            clearIssue(field.key);
+          } },
+        });
+        suggestions = el("datalist", { attrs: { id: listId } }, options.map((option) =>
+          el("option", { attrs: { value: String(option) } })));
+      } else {
+        control = el(
+          "select",
+          {
+            class: "input",
+            attrs: { ...common, required: field.required === true },
+            on: {
+              change: (event) => {
+                if (!draft) return;
+                draft.values[field.key] = (event.target as HTMLSelectElement).value;
+                clearIssue(field.key);
+              },
             },
           },
-        },
-        [
-          el("option", { attrs: { value: "" }, text: tr("form.select") }),
-          ...options.map((option) =>
-            el("option", {
-              attrs: { value: String(option), selected: value !== undefined && String(value) === String(option) },
-              text: String(option),
-            }),
-          ),
-        ],
-      );
+          [
+            el("option", { attrs: { value: "" }, text: tr("form.select") }),
+            ...options.map((option) =>
+              el("option", {
+                attrs: { value: String(option), selected: value !== undefined && String(value) === String(option) },
+                text: String(option),
+              }),
+            ),
+          ],
+        );
+      }
       break;
     }
     case "checkbox":
@@ -464,6 +532,7 @@ function renderField(profile: Profile, field: FieldDef): HTMLElement {
           change: (event) => {
             if (!draft) return;
             draft.values[field.key] = (event.target as HTMLInputElement).checked;
+            clearIssue(field.key);
           },
         },
       });
@@ -471,7 +540,7 @@ function renderField(profile: Profile, field: FieldDef): HTMLElement {
     case "number":
       control = el("input", {
         class: "input",
-        attrs: { ...common, type: "number", inputmode: "numeric", min: field.min, max: field.max },
+        attrs: { ...common, type: "number", inputmode: "decimal", min: field.min, max: field.max },
         props: { value: value === undefined ? "" : String(value) },
         on: {
           input: (event) => {
@@ -521,6 +590,7 @@ function renderField(profile: Profile, field: FieldDef): HTMLElement {
           ...common,
           type: "text",
           maxlength: field.max,
+          placeholder: localize(field.placeholder, state.locale),
           autocomplete: "off",
           spellcheck: "false",
         },
@@ -550,6 +620,7 @@ function renderField(profile: Profile, field: FieldDef): HTMLElement {
   return el("div", { class: `field ${issues.length ? "field-invalid" : ""}` }, [
     label,
     control,
+    suggestions,
     field.help ? el("p", { class: "help", text: localize(field.help, state.locale) }) : null,
     issues.length
       ? el("div", { class: "field-error", attrs: { id: `${id}-error`, role: "alert" } }, issues.map((issue) => el("p", { text: issueMessage(issue) })))
@@ -625,16 +696,14 @@ function renderReview(): HTMLElement {
   if (!draft || !profile) return el("p", { text: tr("common.error") });
   const limit = profile.limits?.max_token_chars ?? 800;
   const target = profile.limits?.target_token_chars ?? 400;
-  const estimate = estimateTokenChars({
-    p: profile.id,
-    pv: profile.version,
-    s: "0000000000000000",
-    ...Object.fromEntries(
-      fieldsOf(profile)
-        .filter((field) => field.short && draft.values[field.key] !== undefined)
-        .map((field) => [field.short, draft.values[field.key]]),
-    ),
+  const previewSessionId = "0000000000000000";
+  const previewDerived = derivedValues(profile, {
+    sessionId: previewSessionId,
+    deviceKid: "AITQR",
+    now: Date.now(),
   });
+  const previewPayload = buildPayload(profile, state.config!.bundle, draft.values, previewDerived, previewSessionId);
+  const estimate = estimateTokenChars(previewPayload);
   const warn = estimate > target;
 
   return el("div", { class: "stack" }, [
@@ -655,7 +724,7 @@ function renderReview(): HTMLElement {
       el("p", { class: "mono", text: tr("review.budget.value", { chars: estimate, limit }) }),
       warn ? el("p", { class: "muted small", text: tr("review.budget.warn") }) : null,
     ]),
-    el("p", { class: "muted small", text: tr("review.account.signed", { name: state.session?.user?.displayName ?? state.session?.user?.username ?? "" }) }),
+    el("p", { class: "muted small", text: tr("review.recipient", { name: profile.consumer || profile.id }) }),
     el("div", { class: "actions actions-stack" }, [
       actionButton(state.busy ? tr("common.busy") : tr("review.generate"), () => void generate(), "primary"),
       actionButton(tr("review.edit"), () => go({ name: "form" }), "secondary"),
@@ -714,7 +783,53 @@ async function generate(): Promise<void> {
   }
 }
 
+type ScreenWakeLockSentinel = { release(): Promise<void>; addEventListener?(type: "release", listener: () => void): void };
+type ScreenWakeLockApi = { request(type: "screen"): Promise<ScreenWakeLockSentinel> };
+
+let activeWakeLock: ScreenWakeLockSentinel | null = null;
+let wakeLockPending = false;
+
+async function releaseQrWakeLock(): Promise<void> {
+  const lock = activeWakeLock;
+  activeWakeLock = null;
+  wakeLockPending = false;
+  state.wakeLockStatus = "idle";
+  if (lock) await lock.release().catch(() => undefined);
+}
+
+async function ensureQrWakeLock(): Promise<void> {
+  if (state.view.name !== "qr" || activeWakeLock || wakeLockPending || state.wakeLockStatus === "unsupported" || state.wakeLockStatus === "failed") return;
+  const api = (navigator as Navigator & { wakeLock?: ScreenWakeLockApi }).wakeLock;
+  if (!api) {
+    state.wakeLockStatus = "unsupported";
+    return;
+  }
+  wakeLockPending = true;
+  state.wakeLockStatus = "pending";
+  try {
+    const lock = await api.request("screen");
+    if (state.view.name !== "qr") {
+      await lock.release().catch(() => undefined);
+      return;
+    }
+    activeWakeLock = lock;
+    state.wakeLockStatus = "active";
+    lock.addEventListener?.("release", () => {
+      if (activeWakeLock === lock) {
+        activeWakeLock = null;
+        state.wakeLockStatus = "idle";
+      }
+    });
+  } catch {
+    state.wakeLockStatus = "failed";
+  } finally {
+    wakeLockPending = false;
+    if (state.view.name === "qr") render();
+  }
+}
+
 function renderQr(record: IssueRecord, redisplay: boolean): HTMLElement {
+  void ensureQrWakeLock();
   const profile = profileOf(record.profileId);
   const ecc = profile?.qr?.ecc ?? state.config?.bundle.global.qr.ecc ?? "Q";
   const quiet = state.config?.bundle.global.qr.quiet_modules ?? 4;
@@ -727,13 +842,14 @@ function renderQr(record: IssueRecord, redisplay: boolean): HTMLElement {
 
   const summary = profile
     ? fieldsOf(profile)
-        .filter((field) => record.summary[field.key])
+        .filter((field) => record.summary[field.key] !== undefined)
         .slice(0, 2)
         .map((field) => `${localize(field.label, state.locale)}: ${record.summary[field.key]}`)
         .join(" 路 ")
     : "";
 
   return el("div", { class: "qr-screen" }, [
+    noticeBar(),
     el("h1", { class: "qr-title", text: tr("qr.title") }),
     el("p", { class: "muted", text: tr("qr.hint") }),
     redisplay ? el("p", { class: "badge badge-warn", text: tr("history.shownAgain") }) : null,
@@ -747,6 +863,7 @@ function renderQr(record: IssueRecord, redisplay: boolean): HTMLElement {
       }`,
     }),
     el("p", { class: "muted small", text: tr("qr.brightness") }),
+    el("p", { class: "muted small", text: tr(state.wakeLockStatus === "active" ? "qr.wake" : state.wakeLockStatus === "unsupported" || state.wakeLockStatus === "failed" ? "qr.wake.unsupported" : "qr.wake.pending") }),
     el("p", { class: "muted small", text: tr("qr.encrypted") }),
     el("div", { class: "actions actions-stack" }, [
       el("div", { class: "actions actions-row" }, [
@@ -756,10 +873,16 @@ function renderQr(record: IssueRecord, redisplay: boolean): HTMLElement {
           text: tr("qr.copy"),
           on: {
             click: () => {
-              void navigator.clipboard?.writeText(record.token).then(() => {
-                state.notice = tr("qr.copied");
+              void (async () => {
+                try {
+                  if (!navigator.clipboard?.writeText) throw new Error("Clipboard tidak tersedia pada browser ini.");
+                  await navigator.clipboard.writeText(record.token);
+                  state.notice = tr("qr.copied");
+                } catch {
+                  state.notice = tr("qr.copy.failed");
+                }
                 render();
-              });
+              })();
             },
           },
         }),
@@ -824,8 +947,14 @@ async function renderHistory(): Promise<HTMLElement> {
             tr("history.clear"),
             async () => {
               if (!window.confirm(tr("history.clear.confirm"))) return;
-              await clearRecords();
-              render();
+              try {
+                await clearRecords();
+                state.notice = null;
+                render();
+              } catch {
+                state.notice = tr("history.clear.failed");
+                render();
+              }
             },
             "danger",
           )
@@ -851,6 +980,9 @@ function render(): void {
       break;
     case "login":
       replace(main, renderLogin());
+      break;
+    case "session-unavailable":
+      replace(main, renderSessionUnavailable());
       break;
     case "config-error":
       replace(main, renderConfigError());
@@ -890,5 +1022,12 @@ export function startApp(): void {
   window.addEventListener("resize", () => {
     if (state.view.name === "qr") render();
   });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.view.name === "qr") {
+      if (state.wakeLockStatus === "failed" || state.wakeLockStatus === "unsupported") state.wakeLockStatus = "idle";
+      void ensureQrWakeLock();
+    }
+  });
+  window.addEventListener("pagehide", () => { void releaseQrWakeLock(); });
   void boot();
 }

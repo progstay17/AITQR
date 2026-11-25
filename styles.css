@@ -233,6 +233,113 @@ body {
   background: linear-gradient(0deg, rgba(255, 119, 126, 0.07), rgba(255, 119, 126, 0.07)), var(--surface-1);
 }
 
+/* Profile builder: each variable is an independent, scannable configuration panel. */
+.field-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #365a7b;
+  border-left: 4px solid var(--blue-primary);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(30, 67, 103, 0.32), rgba(12, 29, 52, 0.96));
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.12);
+}
+.field-editor:nth-of-type(even) {
+  border-left-color: var(--cyan);
+}
+.field-editor-derived {
+  border-left-color: var(--cyan);
+  border-style: dashed;
+}
+.field-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #365a7b;
+}
+.field-editor-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.field-editor-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 38px;
+  min-height: 32px;
+  border: 1px solid #548bc4;
+  border-radius: 8px;
+  background: #102b49;
+  color: #d9eaff;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+.field-editor-title {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.field-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+.field-editor-grid > .field,
+.field-options {
+  min-width: 0;
+}
+.field-options .textarea {
+  min-height: 120px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+.field-required {
+  padding: 8px 0 0;
+}
+.admin-toast {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 76px);
+  right: max(16px, calc((100vw - 720px) / 2));
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(40vh, 240px);
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid #548bc4;
+  border-radius: 12px;
+  background: #102b49;
+  color: #f1f7ff;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42);
+}
+.admin-toast-success {
+  border-color: #3c9d7a;
+  background: #10372f;
+}
+.admin-toast-error {
+  border-color: #bd6269;
+  background: #40252d;
+}
+.admin-toast .link-button {
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  font-size: 20px;
+  text-decoration: none;
+}
+
 /* ---------------------------------------------------------------- readiness */
 
 .status-row {
@@ -729,6 +836,20 @@ select.input option {
   outline-offset: 2px;
 }
 @media (max-width: 480px) {
+  .field-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .field-editor {
+    padding: 12px;
+  }
+  .field-editor-head {
+    align-items: flex-start;
+  }
+  .admin-toast {
+    top: calc(env(safe-area-inset-top) + 64px);
+    right: 12px;
+    width: calc(100vw - 24px);
+  }
   .admin-tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
