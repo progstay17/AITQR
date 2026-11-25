@@ -80,7 +80,4 @@ export async function openDecoderKey(
   } finally {
     bytes.fill(0);
   }
-}  const hex = new TextDecoder().decode(plaintext);
-  if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("Stored decoder key is invalid");
-  return Uint8Array.from(hex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16));
 }
