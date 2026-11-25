@@ -269,3 +269,32 @@ test("account cache is namespaced and an unauthorised response never falls back 
     else Reflect.deleteProperty(globalThis, "navigator");
   }
 });
+
+test("a fresh browser receives the server's real account-config error without a local cache", async () => {
+  const originalFetch = globalThis.fetch;
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const storage = { getItem: () => null, setItem: () => undefined, removeItem: () => undefined };
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { onLine: true } });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: "AITQR_ADMIN_KEY belum dikonfigurasi." }), {
+    status: 503,
+    headers: { "Content-Type": "application/json" },
+  });
+  try {
+    await assert.rejects(
+      () => loadConfig({ trusted: [], account: "fresh-incognito-account" }),
+      (error: unknown) =>
+        error instanceof ConfigUnavailableError &&
+        error.code === "account-config-http" &&
+        error.message.includes("HTTP 503") &&
+        error.message.includes("AITQR_ADMIN_KEY belum dikonfigurasi."),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+    if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);
+    else Reflect.deleteProperty(globalThis, "navigator");
+  }
+});
