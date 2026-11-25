@@ -12,7 +12,7 @@ test("decoder keys are sealed and opened with AES-256-GCM", async () => {
 });
 
 test("decoder key vault rejects a wrong master key", async () => {
-  const sealed = await sealDecoderKey(privateKey, master);
+  const sealed = await sealDecoderKey(privateKey, master, "account-a", "0123456789abcdef");
   await assert.rejects(() => openDecoderKey(sealed.iv, sealed.ciphertext, "b".repeat(64), "account-a", "0123456789abcdef"));
 });
 
