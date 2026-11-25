@@ -46,3 +46,16 @@ test("staff login reuses the authenticated user instead of requesting session tw
   assert.ok(app.includes('api<{ user: SessionUser }>("/api/login"')));
   assert.ok(app.includes("boot({ signedIn: true, user: result.user })"));
 });
+
+test("browser entry points are bundled and the install precache stays lean", () => {
+  const build = readFileSync("scripts/build.mjs", "utf8");
+  const sw = readFileSync("sw.js", "utf8");
+  assert.ok(build.includes('for (const entry of ["main", "admin"])'));
+  assert.ok(build.includes('platform: "browser"'));
+  assert.ok(build.includes("minify: true"));
+  assert.ok(sw.includes('"/app/main.js"'));
+  assert.ok(sw.includes('"/app/admin.js"'));
+  assert.ok(!sw.includes('"/app/mq2.js"'));
+  assert.ok(!sw.includes('"/vendor/metaqr/'));
+  assert.ok(!sw.includes('"/bundles/default.bundle.json"'));
+});
