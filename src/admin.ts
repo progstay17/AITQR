@@ -1181,6 +1181,7 @@ async function loadVaultKeys(): Promise<void> {
   try {
     const result = await api<{ keys: VaultKeyRow[] }>("/api/admin/decoder-keys");
     vaultKeys = result.keys;
+    if (state.activeTab === "inspector") render();
   } catch (error) {
     note(error instanceof Error ? error.message : String(error), "error");
   }
