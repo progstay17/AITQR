@@ -534,7 +534,7 @@ export default {
           if (!/^[0-9a-fA-F]{64}$/.test(masterKey)) return fail("Key Vault belum dikonfigurasi. Atur AITQR_VAULT_MASTER_KEY di environment server.", 503);
           const body = (await req.json().catch(() => null)) as { accountId?: string; privateKeyHex?: string } | null;
           const accountId = String(body?.accountId ?? "");
-          const privateKeyHex = String(body?.privateKeyHex ?? "").replace(/\\s+/g, "");
+          const privateKeyHex = String(body?.privateKeyHex ?? "").replace(/\s+/g, "");
           if (!accountId || !/^[0-9a-fA-F]{64}$/.test(privateKeyHex)) return fail("Pilih akun dan masukkan private key X25519 64 karakter hex.");
           const target = await env.DB.prepare("SELECT id, username FROM users WHERE id = ?").bind(accountId)
             .first<{ id: string; username: string }>();
@@ -551,7 +551,7 @@ export default {
             try {
               const bundle = JSON.parse(source) as Bundle;
               for (const profile of bundle.profiles ?? []) {
-                const candidate = profile.recipient?.public?.replace(/\\s+/g, "").toLowerCase();
+                const candidate = profile.recipient?.public?.replace(/\s+/g, "").toLowerCase();
                 if (candidate && /^[0-9a-f]{64}$/.test(candidate)) accepted.add(candidate);
               }
             } catch { /* malformed drafts are not trusted */ }
