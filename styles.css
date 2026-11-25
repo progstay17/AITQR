@@ -594,7 +594,7 @@ select.input {
 }
 
 
-/* Compact admin navigation: keep QR setup, accounts and audit in separate focused views. */
+/* Admin navigation: keep the dark AITQR palette and readable active states. */
 .admin-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -602,23 +602,139 @@ select.input {
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--surface, #fff);
+  background: var(--surface-1);
 }
 .admin-tab {
   appearance: none;
   border: 1px solid transparent;
   border-radius: 10px;
+  min-height: 44px;
   padding: 10px 16px;
   background: transparent;
-  color: var(--muted);
+  color: var(--text-secondary);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
-.admin-tab:hover { background: var(--surface-soft, #f4f6f8); color: var(--text); }
+.admin-tab:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
 .admin-tab.active {
-  color: var(--text);
-  background: var(--surface-soft, #eef3f8);
-  border-color: var(--line);
+  color: #ffffff;
+  background: #174b82;
+  border-color: var(--blue-bright);
+  box-shadow: inset 0 0 0 1px rgba(98, 168, 255, 0.12);
 }
-.admin-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.admin-tab:focus-visible {
+  outline: 2px solid var(--blue-bright);
+  outline-offset: 2px;
+}
+
+/* Contrast and state audit: avoid low-opacity text and browser-default light controls. */
+:root {
+  --text-secondary: #c3d4e6;
+  --text-muted: #a5bad0;
+}
+.muted,
+.help,
+.status-label,
+.summary dt,
+.footer,
+.brand-sub,
+.tag {
+  color: var(--text-muted);
+}
+.card-title,
+.field-label,
+.list {
+  color: var(--text-secondary);
+}
+.help {
+  font-size: 13px;
+  line-height: 1.45;
+}
+.input,
+.input::placeholder,
+textarea.input {
+  color: var(--text-primary);
+}
+.input::placeholder {
+  color: #a5bad0;
+  opacity: 1;
+}
+.input:disabled,
+.input[disabled] {
+  color: #b7c8d9;
+  background: #142b43;
+  border-color: #49627b;
+  opacity: 1;
+  cursor: not-allowed;
+}
+.input-readonly,
+.input[readonly] {
+  color: #d5e2ef;
+  background: #18334f;
+  border-color: #49627b;
+}
+.input option,
+select.input option {
+  color: #f1f7ff;
+  background: #102744;
+}
+.button:disabled,
+.button[disabled] {
+  color: #c4d2df;
+  background: #263d54;
+  border-color: #526a82;
+  opacity: 1;
+  cursor: not-allowed;
+}
+.button-primary:disabled,
+.button-primary[disabled] {
+  color: #d3dfeb;
+  background: #294765;
+  border-color: #526a82;
+}
+.button-danger:disabled,
+.button-danger[disabled] {
+  color: #d9a4a8;
+  background: #342b35;
+  border-color: #70505a;
+}
+.link-button {
+  color: #8fc1ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.field-error {
+  color: #ff9ba1;
+}
+.tag-required {
+  color: #9bc8ff;
+  border-color: #548bc4;
+  background: rgba(57, 139, 255, 0.1);
+}
+.notice-info {
+  color: #d9eaff;
+  background: #102b49;
+  border-color: #548bc4;
+}
+.checkbox {
+  accent-color: var(--blue-primary);
+}
+:where(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--blue-bright);
+  outline-offset: 2px;
+}
+@media (max-width: 480px) {
+  .admin-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .admin-tab {
+    padding-inline: 8px;
+    font-size: 13px;
+  }
+}
