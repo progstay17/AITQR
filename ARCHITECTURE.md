@@ -76,7 +76,7 @@ Tabel SQLite `account_configs` memiliki satu baris per `users.id`: `draft_source
 - `PUT /api/admin/account-config` hanya menyimpan draf akun yang dipilih. `POST /api/admin/account-config/publish` memvalidasi bundle, menaikkan sequence milik akun itu, menandatangani bundle dengan `AITQR_ADMIN_KEY`, dan memakai compare-and-swap agar dua publikasi bersamaan tidak saling menimpa.
 - `GET /api/account/config` mengambil ID akun dari sesi server yang sudah diverifikasi; klien tidak dapat meminta konfigurasi akun lain dengan mengganti parameter.
 - Browser memverifikasi signature dan menyimpan cache offline dengan key yang mengandung ID akun. Service worker melewatkan seluruh `/api/*` secara network-only; Cache API bersama tidak pernah menyimpan respons yang terikat cookie.
-- Public key X25519 decoder berada pada konfigurasi profil per akun; private key decoder tidak pernah masuk AITQR.
+- Public key X25519 decoder berada pada konfigurasi profil per akun; private key decoder hanya masuk melalui registrasi HTTPS ke Vault dan tidak pernah disimpan plaintext.
 
 ## 4. Aliran data
 
@@ -193,7 +193,7 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 | Bundel konfigurasi palsu (alihkan penerima) | Tanda tangan admin, kunci tepercaya tertanam, `seq` anti-rollback | Kunci admin bocor |
 | XSS | CSP ketat, tanpa pihak ketiga, tanpa inline script, dependensi di-vendor | XSS tetap dapat menandatangani selama halaman terbuka |
 | Rantai pasok | Lockfile, versi pin, salinan Metaqr tanpa modifikasi dengan hash commit, audit dependensi di CI | Kompromi upstream |
-| Kunci perangkat dicuri | Tidak ada signing key petugas; hanya private key decoder di ZYBTool | Token sah antara pencurian dan revoke |
+| Database bocor | Ciphertext key dilindungi AES-256-GCM; master key terpisah dari SQLite | Jika server dan master key sama-sama dikompromikan, seluruh key dapat dibuka |
 | Situs tiruan (phishing) | Kunci tiruan tidak terdaftar → `UNKNOWN_DEVICE` di ZYB Tool | Operator tertipu menampilkan QR palsu |
 | QR difoto/disalin | Terenkripsi ke decoder; replay ditangani konsumen | Replay oleh pemegang HP sah |
 | Operator salah isi `device_id` | Pola `device_id`, layar konfirmasi; ZYB Tool memeriksa C1 | Salah isi yang cocok dengan kamera lain |
@@ -206,7 +206,7 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 
 - **Hosting:** VPS mandiri menjalankan Node.js HTTP API dan SQLite persisten. Caddy menyediakan HTTPS dan reverse proxy ke 127.0.0.1:3000.
 - **Database:** SQLite memakai WAL dan busy timeout; file data berada di luar direktori rilis. Skema dibuat otomatis oleh API saat pertama kali digunakan.
-- **Environment:** APP_ORIGIN, AITQR_SESSION_KEY, AITQR_ADMIN_KEY, AITQR_SETUP_CODE, AITQR_PBKDF2_ITERATIONS, AITQR_DATA_DIR, HOST, dan PORT. Secret dibaca dari environment/systemd EnvironmentFile dan tidak masuk repo.
+- **Environment:** APP_ORIGIN, AITQR_SESSION_KEY, AITQR_ADMIN_KEY, AITQR_SETUP_CODE, AITQR_PBKDF2_ITERATIONS, AITQR_VAULT_MASTER_KEY, AITQR_DATA_DIR, HOST, dan PORT. Secret dibaca dari environment/systemd EnvironmentFile dan tidak masuk repo.
 - **Service:** systemd menjalankan node scripts/serve.mjs, restart saat gagal, dan bind hanya ke loopback; Caddy meneruskan HTTPS.
 - **Build:** npm run build menghasilkan PWA di dist/ dan backend bundle server/app.js di luar direktori static assets.
 - **Signing bundle:** API menandatangani bundle akun ketika dipublikasikan dengan AITQR_ADMIN_KEY; public key pasangannya tertanam di src/config/trustedAdminKeys.ts. Tidak ada private key QR per petugas.
