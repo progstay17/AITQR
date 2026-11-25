@@ -54,16 +54,39 @@ async function fetchBundle(url: string): Promise<unknown | null> {
 }
 
 async function fetchAccountBundle(): Promise<unknown | null> {
+  let response: Response;
   try {
-    const response = await fetch(ACCOUNT_CONFIG_URL, { cache: "no-store", credentials: "same-origin" });
-    if (response.status === 401 || response.status === 403) {
-      throw new ConfigUnavailableError("session is no longer authorised to load this account configuration", "authentication-required");
-    }
-    if (!response.ok) return null;
-    return (await response.json()) as unknown;
-  } catch (error) {
-    if (error instanceof ConfigUnavailableError) throw error;
+    response = await fetch(ACCOUNT_CONFIG_URL, { cache: "no-store", credentials: "same-origin" });
+  } catch {
+    // Network failures may use a previously verified account-scoped cache.
     return null;
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new ConfigUnavailableError(
+      "session is no longer authorised to load this account configuration",
+      "authentication-required",
+    );
+  }
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const payload = (await response.json()) as { error?: unknown };
+      if (typeof payload?.error === "string") detail = payload.error.trim().replace(/\\s+/g, " ").slice(0, 180);
+    } catch {
+      // Keep the HTTP status when the proxy returns a non-JSON error page.
+    }
+    throw new ConfigUnavailableError(
+      "server gagal menyediakan konfigurasi akun (HTTP " + response.status + ")" + (detail ? ": " + detail : ""),
+      "account-config-http",
+    );
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new ConfigUnavailableError(
+      "server mengirim respons konfigurasi akun yang bukan JSON valid",
+      "account-config-response",
+    );
   }
 }
 
@@ -99,7 +122,16 @@ async function loadAccountConfig(accountId: string, trusted: TrustedAdminKey[], 
   }
 
   if (!offline) {
-    const remoteRaw = await fetchAccountBundle();
+    let remoteRaw: unknown | null = null;
+    let remoteError: ConfigUnavailableError | null = null;
+    try {
+      remoteRaw = await fetchAccountBundle();
+    } catch (error) {
+      if (error instanceof ConfigUnavailableError && error.code === "authentication-required") throw error;
+      if (error instanceof ConfigUnavailableError) remoteError = error;
+      else throw error;
+    }
+    if (remoteError && !cachedState) throw remoteError;
     if (remoteRaw !== null) {
       const checked = await verifySignedBundle(remoteRaw, trusted);
       if (!checked.ok) {
@@ -123,7 +155,7 @@ async function loadAccountConfig(accountId: string, trusted: TrustedAdminKey[], 
     return {
       ...cachedState,
       offline: true,
-      updateError: offline ? undefined : "account configuration could not be refreshed; using this account's last verified copy",
+      updateError: offline ? undefined : remoteError?.message ?? "account configuration could not be refreshed; using this account's last verified copy",
     };
   }
 
