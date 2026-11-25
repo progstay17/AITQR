@@ -71,7 +71,7 @@ Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; 
 
 Tabel SQLite `account_configs` memiliki satu baris per `users.id`: `draft_source`, `published_source`, `draft_updated_at`, `draft_updated_by`, `published_at`, dan `published_seq`. Profil, field, label, daftar opsi, mapping payload, dan public key penerima berada di salinan bundle masing-masing akun.
 
-- Pada migrasi, setiap akun lama mendapat salinan satu kali dari `bundle_draft` global yang sudah ada; akun baru mendapat salinan template yang sama saat dibuat.
+- Pada migrasi, setiap akun lama mendapat salinan satu kali dari `bundle_draft` global yang sudah ada; akun baru mendapat bundle dasar dengan `profiles: []` dan `lists: {}`. Admin membuat atau mengimpor preset untuk akun baru sebelum menerbitkan profil operasional.
 - Setelah penyalinan, `bundle_draft` hanya menjadi template awal/kompatibilitas. Editor admin membaca dan menyimpan `account_configs` untuk akun terpilih; tidak ada draft bersama yang dipakai semua petugas.
 - `PUT /api/admin/account-config` hanya menyimpan draf akun yang dipilih. `POST /api/admin/account-config/publish` memvalidasi bundle, menaikkan sequence milik akun itu, menandatangani bundle dengan `AITQR_ADMIN_KEY`, dan memakai compare-and-swap agar dua publikasi bersamaan tidak saling menimpa.
 - `GET /api/account/config` mengambil ID akun dari sesi server yang sudah diverifikasi; klien tidak dapat meminta konfigurasi akun lain dengan mengganti parameter.

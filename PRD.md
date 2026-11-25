@@ -59,7 +59,7 @@ Konfigurasi dipisah menurut kepemilikan:
 
 **Konfigurasi per akun**: setiap akun mempunyai salinan bundle sendiri yang mencakup profil, `fields`, `lists`, `derived`, `payload`, penerima/decoder, batasan, dan opsi render QR. Administrator memilih akun di konsol, mengubah draf akun itu, menyimpan, lalu menerbitkan hanya untuk akun tersebut. Setiap akun mempunyai `published_seq` sendiri.
 
-Akun baru menyalin template awal satu kali. Pada migrasi, akun lama menyalin draf global yang sudah ada satu kali agar pekerjaan admin sebelumnya tidak hilang. Setelah itu, semua salinan independen: perubahan field, daftar pilihan, atau profil akun A tidak mengubah akun B. Draf yang belum diterbitkan tidak dikirim ke petugas.
+Akun baru mulai dengan bundle dasar tanpa preset profil maupun daftar opsi; administrator harus membuat atau mengimpor preset secara eksplisit. Pada migrasi, akun lama menyalin draf global yang sudah ada satu kali agar pekerjaan admin sebelumnya tidak hilang. Setelah itu, semua salinan independen: perubahan field, daftar pilihan, atau profil akun A tidak mengubah akun B. Draf yang belum diterbitkan tidak dikirim ke petugas.
 
 Setiap bundle yang diterbitkan ditandatangani Ed25519. Petugas mengambil bundle melalui endpoint autentikasi yang memilih konfigurasi dari ID akun di sesi server. Klien memverifikasi signature dan menyimpan cache offline dengan namespace ID akun; service worker tidak menyimpan respons API terautentikasi ke cache bersama.
 

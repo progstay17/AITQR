@@ -363,20 +363,22 @@ function renderHome(): HTMLElement {
     card(
       tr("profile.pick"),
       [
-        el(
-          "ul",
-          { class: "profile-list" },
-          profiles.map((profile) =>
-            el("li", { class: "profile-item" }, [
-              el("div", { class: "profile-meta" }, [
-                el("span", { class: "profile-title", text: localize(profile.title, state.locale) }),
-                el("span", { class: "muted small", text: tr("profile.consumer", { consumer: profile.consumer }) }),
-                el("span", { class: "muted small mono", text: `v${profile.version} 路 ${profile.schema_id}` }),
-              ]),
-              actionButton(tr("readiness.start"), () => startSession(profile.id), "primary"),
-            ]),
-          ),
-        ),
+        profiles.length === 0
+          ? el("p", { class: "muted", text: tr("profile.empty") })
+          : el(
+              "ul",
+              { class: "profile-list" },
+              profiles.map((profile) =>
+                el("li", { class: "profile-item" }, [
+                  el("div", { class: "profile-meta" }, [
+                    el("span", { class: "profile-title", text: localize(profile.title, state.locale) }),
+                    el("span", { class: "muted small", text: tr("profile.consumer", { consumer: profile.consumer }) }),
+                    el("span", { class: "muted small mono", text: `v${profile.version} 路 ${profile.schema_id}` }),
+                  ]),
+                  actionButton(tr("readiness.start"), () => startSession(profile.id), "primary"),
+                ]),
+              ),
+            ),
       ],
     ),
     el("div", { class: "actions actions-split" }, [

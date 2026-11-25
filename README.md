@@ -9,7 +9,7 @@ AITQR berjalan mandiri di **VPS menggunakan Node.js + SQLite**. Caddy menangani 
 - Login username + kata sandi, sesi cookie HttpOnly, perlindungan CSRF, dan pembatasan percobaan login.
 - Bootstrap administrator pertama menggunakan kode sekali pakai.
 - Konsol admin sederhana berbasis tab: konfigurasi QR/profil, akun petugas, dan aktivitas. Akun hanya membutuhkan username/kata sandi.
-- Konfigurasi field, profil, daftar pilihan, serta public key decoder **terisolasi per akun**.
+- Konfigurasi field, preset profil, daftar pilihan, serta public key decoder **terisolasi per akun**; preset bisa ditambah, dihapus, diimpor, dan diekspor sebagai JSON.
 - Draft dan publikasi konfigurasi ditandatangani Ed25519; klien memverifikasi signature dan sequence.
 - Penerbitan QR MQ1 terenkripsi X25519. AITQR tidak menyimpan private key decoder dan tidak menggunakan allow-list.
 - PWA offline; cache konfigurasi diberi namespace per akun.
@@ -196,7 +196,7 @@ Tanpa sesi, API admin mengembalikan 401; akun non-admin 403; mutasi lintas-origi
 
 Konsol admin memiliki pemilih akun. Profil, field, label ID/EN, tipe, validasi, grup, opsi, public key decoder, draft, serta publikasi disimpan per akun dalam tabel `account_configs`. Mengubah akun A tidak mengubah akun B. API mengambil ID akun dari sesi yang diverifikasi server, bukan dari ID yang dipercayai dari browser.
 
-Akun lama saat migrasi menerima salinan satu kali dari template lama agar konfigurasi sebelumnya tidak hilang. Akun baru mendapat salinan template awal. Setelah itu setiap salinan berdiri sendiri.
+Akun lama saat migrasi menerima salinan satu kali dari template lama agar konfigurasi sebelumnya tidak hilang. Akun baru memulai dengan daftar profil dan opsi yang kosong; administrator membuat preset atau mengimpor JSON untuk mendefinisikan skema payload akun tersebut. Setelah itu setiap salinan berdiri sendiri.
 
 Cache offline menggunakan namespace per akun. Service worker tidak menyimpan respons `/api/*` ke Cache API bersama, sehingga respons sesi akun lain tidak dapat dipakai lintas akun.
 

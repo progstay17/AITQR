@@ -137,7 +137,7 @@ async function ensureSchema(env: Env): Promise<void> {
           .run();
       }
       const users = await env.DB.prepare("SELECT id FROM users").all<{ id: string }>();
-      for (const account of users.results) await ensureAccountConfig(env, account.id, "migration");
+      for (const account of users.results) await ensureAccountConfig(env, account.id, "migration", true);
     })().catch((error) => {
       schemaReady = undefined;
       throw error;
@@ -146,8 +146,8 @@ async function ensureSchema(env: Env): Promise<void> {
   return schemaReady;
 }
 
-async function accountBundleTemplate(env: Env): Promise<Bundle> {
-  // Preserve the existing global draft as the starting template during migration and for new accounts.
+async function accountBundleTemplate(env: Env, preserveLegacyTemplate: boolean): Promise<Bundle> {
+  // Preserve legacy settings for migrated accounts; new accounts start with an empty profile collection.
   const legacyDraft = await env.DB.prepare("SELECT source FROM bundle_draft WHERE id = 1").first<{ source: string }>();
   const latest = await env.DB.prepare("SELECT signed FROM bundle_versions ORDER BY seq DESC LIMIT 1").first<{
     signed: string;
@@ -158,17 +158,29 @@ async function accountBundleTemplate(env: Env): Promise<Bundle> {
       ? (JSON.parse(latest.signed) as SignedBundle).bundle
       : (defaultSigned as unknown as SignedBundle).bundle;
   const bundle = JSON.parse(JSON.stringify(source)) as Bundle;
+  // Existing accounts keep their migrated configuration. New accounts start with no profile
+  // presets, so the administrator explicitly defines the payload contract for that account.
+  if (!preserveLegacyTemplate) {
+    bundle.profiles = [];
+    bundle.lists = {};
+    delete bundle.global.allowed_profiles;
+  }
   bundle.seq = 1;
   bundle.issued = new Date().toISOString();
   return bundle;
 }
 
-async function ensureAccountConfig(env: Env, userId: string, actor: string): Promise<void> {
+async function ensureAccountConfig(
+  env: Env,
+  userId: string,
+  actor: string,
+  preserveLegacyTemplate = false,
+): Promise<void> {
   const existing = await env.DB.prepare("SELECT user_id FROM account_configs WHERE user_id = ?")
     .bind(userId)
     .first<{ user_id: string }>();
   if (existing) return;
-  const bundle = await accountBundleTemplate(env);
+  const bundle = await accountBundleTemplate(env, preserveLegacyTemplate);
   const now = Date.now();
   const source = JSON.stringify(bundle);
   await env.DB.prepare(
@@ -649,7 +661,6 @@ export default {
         }
         const checked = validateSource(parsed);
         if ("problems" in checked) return json({ problems: checked.problems }, { status: 422 });
-        if (checked.bundle.profiles.length === 0) return fail("Minimal satu profil harus tersedia untuk akun ini.", 422);
         const now = Date.now();
         await env.DB.prepare(
           "UPDATE account_configs SET draft_source = ?, draft_updated_at = ?, draft_updated_by = ? WHERE user_id = ?",
@@ -680,7 +691,6 @@ export default {
         }
         const checked = validateSource(parsed);
         if ("problems" in checked) return json({ problems: checked.problems }, { status: 422 });
-        if (checked.bundle.profiles.length === 0) return fail("Minimal satu profil harus tersedia untuk akun ini.", 422);
         const seed = env.AITQR_ADMIN_KEY?.trim() ?? "";
         if (!/^[0-9a-fA-F]{64}$/.test(seed)) return fail("AITQR_ADMIN_KEY belum dikonfigurasi.", 503);
         const nextSeq = Number(row.published_seq) + 1;

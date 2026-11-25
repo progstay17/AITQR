@@ -96,6 +96,7 @@ test("admin field settings are isolated and published per account", async () => 
     }
     const alphaId = await createStaff("staffalpha", "11".repeat(32));
     const betaId = await createStaff("staffbeta", "22".repeat(32));
+    const emptyId = await createStaff("staffempty", "33".repeat(32));
 
     async function draftFor(accountId: string): Promise<any> {
       const current = await expect("/api/admin/state", "GET", undefined, admin);
@@ -103,8 +104,20 @@ test("admin field settings are isolated and published per account", async () => 
       assert.ok(row);
       return JSON.parse(row.draftSource);
     }
+    const emptyDraft = await draftFor(emptyId);
+    assert.deepEqual(emptyDraft.profiles, [], "new accounts start without a preselected profile");
+    assert.deepEqual(emptyDraft.lists, {}, "new accounts start without inherited lists");
+    assert.equal(emptyDraft.global.allowed_profiles, undefined);
+    await expect("/api/admin/account-config", "PUT", { accountId: emptyId, source: emptyDraft }, admin);
+    const emptyPublished = await expect("/api/admin/account-config/publish", "POST", { accountId: emptyId }, admin);
+    assert.equal(emptyPublished.seq, 2, "an empty profile collection is a valid published draft");
+
     async function setAndPublish(accountId: string, label: string, location: string) {
       const bundle = await draftFor(accountId);
+      assert.deepEqual(bundle.profiles, [], "preset must be deliberately added to a new account");
+      bundle.global = structuredClone(legacyTemplate.bundle.global);
+      bundle.lists = structuredClone(legacyTemplate.bundle.lists);
+      bundle.profiles = structuredClone(legacyTemplate.bundle.profiles);
       bundle.profiles[0].fields[0].label = { id: label, en: label };
       bundle.lists.locations = [location];
       await expect("/api/admin/account-config", "PUT", { accountId, source: bundle }, admin);
@@ -137,6 +150,11 @@ test("admin field settings are isolated and published per account", async () => 
       kid: bytesToHex(await kidOf(signer.publicKey)),
       public: bytesToHex(signer.publicKey),
     }];
+    const emptyCookie = await login("staffempty");
+    const emptyConfig = await call("/api/account/config", "GET", undefined, emptyCookie);
+    assert.equal(emptyConfig.response.status, 200);
+    assert.deepEqual(emptyConfig.data.bundle.profiles, [], "empty account config is served as a signed bundle");
+    assert.equal((await verifySignedBundle(emptyConfig.data, trusted)).ok, true);
     assert.equal((await verifySignedBundle(a.data, trusted)).ok, true);
     assert.equal((await verifySignedBundle(b.data, trusted)).ok, true);
 

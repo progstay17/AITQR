@@ -3,7 +3,8 @@
  * AITQR never generates account keys — the administrator only stores each account's public key.
  */
 import { el, replace } from "./dom.js";
-import { FIELD_TYPES } from "./profile.js";
+import { FIELD_TYPES, validateProfile } from "./profile.js";
+import { exportAllProfilePresets, exportProfilePreset, importProfilePresets } from "./preset.js";
 import type { Bundle, FieldDef, Localized, Profile } from "./types.js";
 
 interface AdminSession {
@@ -465,18 +466,34 @@ function fieldEditor(profile: Profile, field: FieldDef, index: number): HTMLElem
   ]);
 }
 
+function downloadJsonFile(fileName: string, value: unknown): void {
+  const blob = new Blob([JSON.stringify(value, null, 2) + "\n"], {
+    type: "application/json;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function safePresetFileName(value: string): string {
+  const safe = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return safe || "aitqr-preset";
+}
+
 function renderFields(): HTMLElement | null {
   const doc = state.doc;
   const account = state.loaded?.users.find((item) => item.id === state.accountId);
   const accountConfig = selectedAccountConfig();
   if (!doc || !account || !accountConfig) {
-    return card("Kolom metadata per akun", [
-      el("p", { class: "muted", text: "Pilih atau buat akun untuk mengatur field secara terpisah." }),
+    return card("Preset / Profil QR", [
+      el("p", { class: "muted", text: "Pilih atau buat akun untuk mengatur preset payload secara terpisah." }),
     ]);
-  }
-  const profile = selectedProfile();
-  if (!profile) {
-    return card("Kolom metadata per akun", [el("p", { class: "muted", text: "Draf akun belum memiliki profil." })]);
   }
 
   const accountSelector = el(
@@ -501,42 +518,249 @@ function renderFields(): HTMLElement | null {
     (state.loaded?.users ?? []).map((item) =>
       el("option", {
         attrs: { value: item.id, selected: item.id === state.accountId },
-        text: (item.displayName ?? item.username) + " ? " + item.username + " ? " + item.role + " ? " + item.status,
+        text: (item.displayName ?? item.username) + " · " + item.username + " · " + item.role + " · " + item.status,
       }),
     ),
   );
 
+  const profile = selectedProfile();
   const profileSelector = el(
     "select",
     {
       class: "input",
-      props: { value: profile.id },
+      attrs: { disabled: doc.profiles.length === 0 },
+      props: { value: profile?.id ?? "" },
       on: {
         change: (event) => {
-          state.profileId = (event.target as HTMLSelectElement).value;
+          state.profileId = (event.target as HTMLSelectElement).value || null;
           render();
         },
       },
     },
-    doc.profiles.map((item) =>
-      el("option", { attrs: { value: item.id, selected: item.id === profile.id }, text: item.id + " v" + item.version }),
-    ),
+    [
+      el("option", { attrs: { value: "" }, text: doc.profiles.length ? "Pilih preset" : "Belum ada preset" }),
+      ...doc.profiles.map((item) =>
+        el("option", {
+          attrs: { value: item.id, selected: item.id === profile?.id },
+          text: item.id + " v" + item.version,
+        }),
+      ),
+    ],
   );
 
-  return card(
-    "Kolom metadata per akun",
-    [
+  const importInput = el("input", {
+    attrs: { type: "file", accept: ".json,application/json", hidden: true },
+    on: {
+      change: (event) => {
+        const control = event.target as HTMLInputElement;
+        const file = control.files?.[0];
+        if (!file) return;
+        void file.text()
+          .then((raw) => {
+            const imported = importProfilePresets(JSON.parse(raw) as unknown);
+            const ids = new Set(doc.profiles.map((item) => item.id));
+            for (const preset of imported) {
+              if (ids.has(preset.profile.id)) {
+                throw new Error("Preset dengan ID " + preset.profile.id + " sudah ada. Ubah ID file atau hapus preset lama terlebih dahulu.");
+              }
+              ids.add(preset.profile.id);
+            }
+
+            for (const preset of imported) {
+              const nextProfile = JSON.parse(JSON.stringify(preset.profile)) as Profile;
+              const remapped = new Map<string, string>();
+              for (const [listName, options] of Object.entries(preset.lists)) {
+                let targetName = listName;
+                if (doc.lists[targetName] && JSON.stringify(doc.lists[targetName]) !== JSON.stringify(options)) {
+                  const base = listName + "_imported";
+                  targetName = base;
+                  let suffix = 2;
+                  while (doc.lists[targetName] && JSON.stringify(doc.lists[targetName]) !== JSON.stringify(options)) {
+                    targetName = base + "_" + suffix++;
+                  }
+                }
+                if (!doc.lists[targetName]) doc.lists[targetName] = [...options];
+                remapped.set(listName, targetName);
+              }
+              for (const field of nextProfile.fields) {
+                if (field.list && remapped.has(field.list)) field.list = remapped.get(field.list);
+              }
+              doc.profiles.push(nextProfile);
+              if (doc.global.allowed_profiles && !doc.global.allowed_profiles.includes(nextProfile.id)) {
+                doc.global.allowed_profiles.push(nextProfile.id);
+              }
+            }
+            state.profileId = imported[0]?.profile.id ?? null;
+            state.dirty = true;
+            note(imported.length + " preset berhasil diimpor ke draf akun. Simpan draf sebelum menerbitkan.");
+          })
+          .catch((error: unknown) => {
+            note("Import preset gagal: " + (error instanceof Error ? error.message : String(error)));
+          })
+          .finally(() => {
+            control.value = "";
+          });
+      },
+    },
+  });
+
+  const addPreset = (): void => {
+    const used = new Set(doc.profiles.map((item) => item.id));
+    let id = "preset-baru";
+    let suffix = 2;
+    while (used.has(id)) id = "preset-baru-" + suffix++;
+    const next: Profile = {
+      id,
+      version: 1,
+      title: { id: "Preset baru", en: "New preset" },
+      consumer: "",
+      recipient: { public: "" },
+      schema_id: "",
+      fields: [],
+    };
+    doc.profiles.push(next);
+    if (doc.global.allowed_profiles && !doc.global.allowed_profiles.includes(id)) {
+      doc.global.allowed_profiles.push(id);
+    }
+    state.profileId = id;
+    state.dirty = true;
+    render();
+  };
+
+  const removePreset = (): void => {
+    if (!profile) return;
+    if (!window.confirm("Hapus preset " + profile.id + " dari draf akun ini? Perubahan berlaku setelah draf disimpan dan dipublikasikan.")) return;
+    doc.profiles = doc.profiles.filter((item) => item.id !== profile.id);
+    const referencedLists = new Set(doc.profiles.flatMap((item) => item.fields.map((field) => field.list).filter((name): name is string => Boolean(name))));
+    for (const listName of Object.keys(doc.lists)) {
+      if (!referencedLists.has(listName)) delete doc.lists[listName];
+    }
+    if (doc.global.allowed_profiles) {
+      doc.global.allowed_profiles = doc.global.allowed_profiles.filter((id) => id !== profile.id);
+    }
+    state.profileId = doc.profiles[0]?.id ?? null;
+    state.dirty = true;
+    render();
+  };
+
+  const exportSelectedPreset = (): void => {
+    if (!profile) return;
+    const problems = validateProfile(profile, doc.lists);
+    if (problems.length > 0) {
+      note("Preset belum valid: " + problems.join("; "));
+      return;
+    }
+    downloadJsonFile(
+      safePresetFileName(profile.id) + ".aitqr-preset.json",
+      exportProfilePreset(profile, doc),
+    );
+    note("Preset " + profile.id + " diekspor sebagai JSON.");
+  };
+
+  const exportAllPresets = (): void => {
+    const problems = doc.profiles.flatMap((item) => validateProfile(item, doc.lists));
+    if (problems.length > 0) {
+      note("Semua preset harus valid sebelum export sekaligus: " + problems.join("; "));
+      return;
+    }
+    if (doc.profiles.length === 0) return;
+    downloadJsonFile(
+      "aitqr-presets.json",
+      exportAllProfilePresets(doc.profiles, doc),
+    );
+    note(doc.profiles.length + " preset diekspor sebagai JSON.");
+  };
+
+  const presetActions = el("div", { class: "actions actions-row" }, [
+    profileSelector,
+    button("Tambah preset", addPreset, "primary"),
+    button("Hapus preset", removePreset, "danger", !profile),
+    button("Import JSON", () => importInput.click(), "secondary"),
+    button("Export preset", exportSelectedPreset, "secondary", !profile),
+    button("Export semua", exportAllPresets, "secondary", doc.profiles.length === 0),
+    importInput,
+  ]);
+
+  const children: (Node | string | null | undefined)[] = [
+    el("p", {
+      class: "muted small",
+      text: "Preset, field, daftar opsi, dan public key penerima hanya berlaku untuk akun " +
+        (account.displayName ?? account.username) + ". Template akun baru dimulai kosong; tidak ada skema alat yang dipaksakan.",
+    }),
+    el("label", { class: "field" }, [
+      el("span", { class: "field-label", text: "Akun yang dikonfigurasi" }),
+      accountSelector,
+    ]),
+    el("div", { class: "stack-tight" }, [
+      el("span", { class: "field-label", text: "PRESET / SKEMA PAYLOAD" }),
+      presetActions,
+    ]),
+  ];
+
+  if (!profile) {
+    children.push(
+      el("p", {
+        class: "muted",
+        text: "Belum ada preset untuk akun ini. Tambahkan preset baru atau impor file JSON. QR belum dapat diterbitkan sampai preset valid dibuat dan dipublikasikan.",
+      }),
+    );
+  } else {
+    const originalProfileId = profile.id;
+    const titleParts = localizeParts(profile.title);
+    children.push(
+      el("div", { class: "field-editor" }, [
+        el("h3", { class: "card-title", text: "Identitas preset" }),
+        el("div", { class: "grid-2" }, [
+          input(profile.id, (next) => {
+            const value = next.trim();
+            if (doc.profiles.some((item) => item !== profile && item.id === value)) {
+              note("ID preset sudah dipakai oleh profil lain.");
+              return;
+            }
+            const previous = profile.id;
+            profile.id = value;
+            if (doc.global.allowed_profiles?.includes(originalProfileId)) {
+              doc.global.allowed_profiles = doc.global.allowed_profiles.filter((id) => id !== originalProfileId);
+              if (value) doc.global.allowed_profiles.push(value);
+            }
+            state.profileId = value || previous;
+            state.dirty = true;
+          }, { label: "ID preset", mono: true, placeholder: "nama-profil" }),
+          input(String(profile.version), (next) => {
+            profile.version = next.trim() ? Number(next) : 0;
+            state.dirty = true;
+          }, { label: "Versi skema", type: "number" }),
+          input(titleParts.id, (next) => {
+            const parts = localizeParts(profile.title);
+            parts.id = next;
+            profile.title = parts.id === parts.en ? parts.id : parts;
+            state.dirty = true;
+          }, { label: "Nama preset (Indonesia)" }),
+          input(titleParts.en, (next) => {
+            const parts = localizeParts(profile.title);
+            parts.en = next;
+            profile.title = parts.id === parts.en ? parts.id : parts;
+            state.dirty = true;
+          }, { label: "Preset name (English)" }),
+          input(profile.consumer, (next) => {
+            profile.consumer = next.trim();
+            state.dirty = true;
+          }, { label: "Consumer / alat", placeholder: "nama-konsumen" }),
+          input(profile.schema_id, (next) => {
+            profile.schema_id = next.trim();
+            state.dirty = true;
+          }, { label: "Schema ID", mono: true, placeholder: "consumer-schema/v1" }),
+        ]),
+      ]),
       el("p", {
         class: "muted small",
-        text: "Field, daftar opsi, profil, dan kunci penerima di bawah ini hanya berlaku untuk akun " +
-          (account.displayName ?? account.username) + ". Setiap akun memiliki draf dan publikasi terpisah.",
+        text: "Perubahan schema harus menaikkan versi profil. Pastikan public key cocok dengan decoder penerima sebelum menerbitkan.",
       }),
-      el("label", { class: "field" }, [
-        el("span", { class: "field-label", text: "Akun yang dikonfigurasi" }),
-        accountSelector,
-      ]),
+      el("p", {
+        class: "muted small",
+        text: "Kolom dengan kunci payload masuk ke token; tanpa kunci payload hanya tampil di formulir.",
+      }),
       el("div", { class: "actions actions-row" }, [
-        profileSelector,
         button(
           "Tambah kolom",
           () => {
@@ -557,33 +781,40 @@ function renderFields(): HTMLElement | null {
           "secondary",
         ),
       ]),
-      el("p", {
-        class: "muted small",
-        text: "Kolom dengan kunci payload masuk ke token; tanpa kunci payload hanya tampil di formulir.",
-      }),
       ...profile.fields.map((field, index) => fieldEditor(profile, field, index)),
-      el("details", { class: "details" }, [
-        el("summary", { text: "JSON mentah draf akun" }),
-        el("textarea", {
-          class: "input textarea mono",
-          props: { value: JSON.stringify(doc, null, 2) },
-          on: {
-            change: (event) => {
-              try {
-                const parsed = JSON.parse((event.target as HTMLTextAreaElement).value) as Bundle;
-                state.doc = parsed;
-                state.dirty = true;
-                state.profileId = parsed.profiles[0]?.id ?? null;
-                note("JSON diterapkan ke draf akun di layar. Tekan Simpan draf akun untuk menyimpan.");
-              } catch {
-                note("JSON tidak valid");
+    );
+  }
+
+  children.push(
+    el("details", { class: "details" }, [
+      el("summary", { text: "JSON mentah draf akun" }),
+      el("textarea", {
+        class: "input textarea mono",
+        props: { value: JSON.stringify(doc, null, 2) },
+        on: {
+          change: (event) => {
+            try {
+              const parsed = JSON.parse((event.target as HTMLTextAreaElement).value) as Bundle;
+              if (!parsed || !Array.isArray(parsed.profiles) || !parsed.global || !parsed.lists) {
+                throw new Error("Bundle harus memiliki global, lists, dan profiles.");
               }
-            },
+              state.doc = parsed;
+              state.dirty = true;
+              state.profileId = parsed.profiles[0]?.id ?? null;
+              note("JSON diterapkan ke draf akun di layar. Tekan Simpan draf akun untuk menyimpan.");
+            } catch (error) {
+              note("JSON tidak valid: " + (error instanceof Error ? error.message : String(error)));
+            }
           },
-        }),
-      ]),
-    ],
-    "Konfigurasi terisolasi untuk akun " + account.username + ". Perubahan di sini tidak mengubah akun lain.",
+        },
+      }),
+    ]),
+  );
+
+  return card(
+    "Preset / Profil QR",
+    children,
+    "Konfigurasi terisolasi untuk akun " + account.username + ". Draf kosong diperbolehkan; QR hanya bisa diterbitkan dari profil yang valid dan telah dipublikasikan.",
   );
 }
 

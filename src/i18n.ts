@@ -83,6 +83,7 @@ const DICT: Record<string, Entry> = {
   "readiness.key": ["Identitas perangkat", "Device identity"],
 
   "profile.pick": ["Pilih profil", "Choose a profile"],
+  "profile.empty": ["Belum ada preset untuk akun ini. Hubungi administrator untuk menambahkan profil.", "No presets are configured for this account. Ask your administrator to add a profile."],
   "profile.consumer": ["Untuk {consumer}", "For {consumer}"],
   "profile.schema": ["Skema payload: {schema}", "Payload schema: {schema}"],
 
