@@ -1280,7 +1280,7 @@ function render(): void {
 
   replace(
     main,
-    el("div", { class: "stack" }, [
+    el("div", { class: "stack admin-page" }, [
       state.notice
         ? el("div", {
             class: `admin-toast admin-toast-${state.noticeKind}`,

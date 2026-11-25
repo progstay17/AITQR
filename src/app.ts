@@ -1,4 +1,4 @@
-﻿import { ConfigUnavailableError, bundleAgeDays, loadConfig } from "./config/load.js";
+import { ConfigUnavailableError, bundleAgeDays, loadConfig } from "./config/load.js";
 import { TRUSTED_ADMIN_KEYS } from "./config/trustedAdminKeys.js";
 import { el, fieldId, replace } from "./dom.js";
 import { addRecord, clearRecords, listRecords, readLocale, rememberLocale } from "./db.js";
@@ -368,9 +368,20 @@ function renderHome(): HTMLElement {
       ])
     : null;
 
-  return el("div", { class: "stack" }, [
+  return el("div", { class: "stack home-page" }, [
     noticeBar(),
     updateNotice,
+    el("section", { class: "home-hero", attrs: { "aria-labelledby": "home-title" } }, [
+      el("div", { class: "home-eyebrow" }, [
+        el("span", { class: "home-eyebrow-mark", attrs: { "aria-hidden": "true" } }),
+        el("span", { text: tr("home.hero.eyebrow") }),
+      ]),
+      el("h1", { class: "home-title", attrs: { id: "home-title" } }, [
+        el("span", { text: tr("home.hero.title.lead") }),
+        el("em", { text: tr("home.hero.title.accent") }),
+      ]),
+      el("p", { class: "home-description", text: tr("home.hero.body") }),
+    ]),
     card(tr("readiness.title"), [
       el("div", { class: "status-row status-ok" }, [
         el("span", { class: "status-label", text: tr("readiness.account") }),
@@ -387,7 +398,7 @@ function renderHome(): HTMLElement {
         }),
       ]),
       config.updateError ? el("p", { class: "muted small", text: `${tr("config.reason")}: ${config.updateError}` }) : null,
-    ]),
+    ], "home-status"),
     card(
       tr("profile.pick"),
       [
@@ -408,6 +419,7 @@ function renderHome(): HTMLElement {
               ),
             ),
       ],
+      "home-profiles",
     ),
     el("div", { class: "actions actions-split" }, [
       actionButton(tr("readiness.history"), () => go({ name: "history" }), "secondary"),

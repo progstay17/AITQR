@@ -54,6 +54,13 @@ const DICT: Record<string, Entry> = {
   "home.admin": ["Konsol admin", "Admin console"],
   "home.update": ["Versi aplikasi baru tersedia.", "A new app version is available."],
   "home.reload": ["Muat ulang", "Reload"],
+  "home.hero.eyebrow": ["ALUR PENERBITAN QR", "SECURE QR WORKFLOW"],
+  "home.hero.title.lead": ["Siapkan sesi.", "Prepare the session."],
+  "home.hero.title.accent": ["QR siap dipindai.", "QR ready to scan."],
+  "home.hero.body": [
+    "Pilih profil, lengkapi metadata, lalu tampilkan QR terenkripsi ke kamera.",
+    "Choose a profile, complete the metadata, then present the encrypted QR to the camera.",
+  ],
 
   "readiness.account": ["Akun", "Account"],
   "readiness.signing": ["Signature konfigurasi admin", "Admin configuration signature"],
