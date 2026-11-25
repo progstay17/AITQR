@@ -101,6 +101,7 @@ const env = {
   AITQR_SESSION_KEY: process.env.AITQR_SESSION_KEY,
   AITQR_SETUP_CODE: process.env.AITQR_SETUP_CODE,
   AITQR_PBKDF2_ITERATIONS: process.env.AITQR_PBKDF2_ITERATIONS,
+  AITQR_VAULT_MASTER_KEY: process.env.AITQR_VAULT_MASTER_KEY,
 };
 
 function headerValue(value) {
