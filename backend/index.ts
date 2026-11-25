@@ -9,7 +9,7 @@ import { signBundle as signWithKey } from "../src/config/sign.js";
 import { assertBundleShape } from "../src/config/verify.js";
 import { validateProfile } from "../src/profile.js";
 import { bytesToHex, kidOf, decode, fingerprint, webCryptoX25519 } from "../vendor/metaqr/src/index.js";
-import { openDecoderKey, sealDecoderKey } from "./decoder-vault.js";
+import { openDecoderKey, sealDecoderKey } from "../src/decoder-vault.js";
 import {
   createSessionToken,
   hashPassword,
