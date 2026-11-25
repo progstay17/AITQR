@@ -559,7 +559,7 @@ export default {
           if (!accepted.has(publicHex)) return fail("Private key tidak cocok dengan public key decoder pada profil akun ini. Periksa akun dan key yang dipilih.", 422);
           const kid = await fingerprint(publicKey);
           let sealed: { iv: string; ciphertext: string };
-          try { sealed = await sealDecoderKey(privateKeyHex, masterKey); }
+          try { sealed = await sealDecoderKey(privateKeyHex, masterKey, accountId, kid); }
           catch { return fail("Gagal menyimpan key ke Vault. Periksa konfigurasi master key.", 503); }
           await env.DB.prepare(
             "INSERT INTO decoder_keys (account_id, kid, public_key, iv, ciphertext, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) " +
@@ -598,7 +598,7 @@ export default {
         for (const row of rows.results) {
           let privateKey: Uint8Array | null = null;
           try {
-            privateKey = await openDecoderKey(row.iv, row.ciphertext, masterKey);
+            privateKey = await openDecoderKey(row.iv, row.ciphertext, masterKey, accountId, row.kid);
             const payload = await decode(token, privateKey);
             await log(env, user.username, "qr.decrypt", target.username + " kid=" + row.kid);
             return json({ ok: true, accountId, username: target.username, kid: row.kid, payload });
