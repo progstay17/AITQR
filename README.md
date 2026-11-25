@@ -8,10 +8,10 @@ AITQR berjalan mandiri di **VPS menggunakan Node.js + SQLite**. Caddy menangani 
 
 - Login username + kata sandi, sesi cookie HttpOnly, perlindungan CSRF, dan pembatasan percobaan login.
 - Bootstrap administrator pertama menggunakan kode sekali pakai.
-- Konsol admin sederhana berbasis tab: konfigurasi QR/profil, akun petugas, dan aktivitas. Akun hanya membutuhkan username/kata sandi.
+- Konsol admin berbasis tab: konfigurasi QR/profil, akun petugas, QR Inspector dengan kamera langsung, dan aktivitas.
 - Konfigurasi field, preset profil, daftar pilihan, serta public key decoder **terisolasi per akun**; preset bisa ditambah, dihapus, diimpor, dan diekspor sebagai JSON.
 - Draft dan publikasi konfigurasi ditandatangani Ed25519; klien memverifikasi signature dan sequence.
-- Penerbitan QR MQ1 terenkripsi X25519. AITQR tidak menyimpan private key decoder dan tidak menggunakan allow-list.
+- Penerbitan QR MQ1 terenkripsi X25519. Private key decoder dapat didaftarkan satu kali per akun ke Vault AES-256-GCM untuk decrypt QR dari browser admin; key tidak pernah dikirim kembali ke browser.
 - PWA offline; cache konfigurasi diberi namespace per akun.
 - SQLite lokal dengan WAL; data disimpan persisten di direktori data VPS.
 
@@ -31,6 +31,7 @@ Buat file environment lokal yang tidak di-commit, misalnya `.env.local`, lalu ek
 ```bash
 openssl rand -hex 32   # AITQR_SESSION_KEY
 openssl rand -hex 24   # AITQR_SETUP_CODE
+openssl rand -hex 32   # AITQR_VAULT_MASTER_KEY (backup terpisah dari database)
 npm run keys:init      # membuat pasangan kunci admin di keys/admin/
 ```
 
@@ -52,6 +53,7 @@ $env:AITQR_DATA_DIR = ".\data"
 $env:AITQR_SESSION_KEY = "<64 hex>"
 $env:AITQR_ADMIN_KEY = "<64 hex>"
 $env:AITQR_SETUP_CODE = "<48 hex>"
+$env:AITQR_VAULT_MASTER_KEY = "<64 hex>"
 npm start
 ```
 
@@ -108,10 +110,11 @@ AITQR_DATA_DIR=/var/lib/aitqr
 AITQR_SESSION_KEY=<hasil openssl rand -hex 32>
 AITQR_ADMIN_KEY=<seed Ed25519 32-byte hex>
 AITQR_SETUP_CODE=<hasil openssl rand -hex 24>
+AITQR_VAULT_MASTER_KEY=<hasil openssl rand -hex 32>
 AITQR_PBKDF2_ITERATIONS=120000
 ```
 
-`AITQR_ADMIN_KEY` harus cocok dengan public key yang tertanam di `src/config/trustedAdminKeys.ts`. Jangan memakai placeholder nol. Jangan memasukkan private key ke source code, Git, atau chat. Gunakan environment file yang hanya dapat dibaca root/systemd.
+`AITQR_ADMIN_KEY` harus cocok dengan public key yang tertanam di `src/config/trustedAdminKeys.ts`. Jangan memakai placeholder nol. Jangan memasukkan private key decoder atau master key Vault ke source code, Git, atau chat. Gunakan environment file yang hanya dapat dibaca root/systemd. Master key Vault wajib dicadangkan secara terpisah dari backup SQLite; jika hilang, key decoder tidak dapat dipulihkan.
 
 ### 3. Aktifkan systemd dan Caddy
 
@@ -171,6 +174,7 @@ Jangan menyalin hanya file database saat WAL sedang aktif tanpa prosedur backup 
 | `APP_ORIGIN` | Ya | Origin publik HTTPS untuk validasi same-origin |
 | `AITQR_DATA_DIR` | Ya di produksi | Direktori file SQLite persisten |
 | `AITQR_PBKDF2_ITERATIONS` | Tidak | PBKDF2-SHA256; default VPS 120000 |
+| `AITQR_VAULT_MASTER_KEY` | Ya untuk QR Inspector | Kunci AES-256-GCM 32 byte (64 digit hex); simpan di environment, backup terpisah dari SQLite |
 | `HOST`, `PORT` | Tidak | Default `127.0.0.1:3000` |
 
 ## Rute API
