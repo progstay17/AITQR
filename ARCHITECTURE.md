@@ -5,7 +5,7 @@ Pasangan dokumen: `PRD.md`, `AGENTS.md`. Konsumen pertama: `ZYBTool/ARCHITECTURE
 
 ## 1. Arsitektur yang direkomendasikan
 
-**PWA mobile-first + Node.js HTTP API + SQLite**. Form, payload, enkripsi MQ1, dan render QR berjalan di browser HP. Tidak ada signing key per petugas. API server menangani login, administrasi akun, penyimpanan konfigurasi per akun, dan signing bundle admin. SQLite menyimpan akun/konfigurasi/audit, bukan private key decoder.
+**PWA mobile-first + Node.js HTTP API + SQLite**. Form, payload, enkripsi MQ1, dan render QR berjalan di browser HP. Tidak ada signing key per petugas. API server menangani login, administrasi akun, penyimpanan konfigurasi per akun, dan signing bundle admin. SQLite menyimpan akun/konfigurasi/audit serta ciphertext private key decoder yang dilindungi AES-256-GCM; plaintext key hanya dibuka sementara di backend untuk proses decrypt.
 
 Dasar teknis, dari pembacaan repo Metaqr (`js/`, v0.4.0) [F]:
 - Encoder JS `encode(metadata, recipientPublic, {compress, maxChars})` menghasilkan token MQ1 terenkripsi. Tanpa signer, tanpa tanda tangan QR.
@@ -30,7 +30,7 @@ Pilihan implementasi [A, lihat PRD §12]: TypeScript tanpa framework UI berat, b
 | `history` | Riwayat penerbitan lokal (IndexedDB). | Adaptor |
 | `pwa` | Service worker, cache berversi, alur pembaruan. | Platform |
 | `i18n` | Bahasa Indonesia/Inggris. | Ya |
-| `tools/` (Node, terpisah) | CLI admin: `lint-profile`, `budget`, `sign-bundle`, `make-vectors`, (tidak ada registrasi/allow-list QR). | CLI |
+| `tools/` (Node, terpisah) | CLI admin: `lint-profile`, `budget`, `sign-bundle`, `make-vectors`. Registrasi key hanya melalui Admin QR Inspector; tidak ada allow-list QR. | CLI |
 
 Batas: `config`, `profile`, `payload` tidak mengimpor DOM atau kripto platform; semua dapat diuji di Node tanpa browser.
 
@@ -76,7 +76,7 @@ Tabel SQLite `account_configs` memiliki satu baris per `users.id`: `draft_source
 - `PUT /api/admin/account-config` hanya menyimpan draf akun yang dipilih. `POST /api/admin/account-config/publish` memvalidasi bundle, menaikkan sequence milik akun itu, menandatangani bundle dengan `AITQR_ADMIN_KEY`, dan memakai compare-and-swap agar dua publikasi bersamaan tidak saling menimpa.
 - `GET /api/account/config` mengambil ID akun dari sesi server yang sudah diverifikasi; klien tidak dapat meminta konfigurasi akun lain dengan mengganti parameter.
 - Browser memverifikasi signature dan menyimpan cache offline dengan key yang mengandung ID akun. Service worker melewatkan seluruh `/api/*` secara network-only; Cache API bersama tidak pernah menyimpan respons yang terikat cookie.
-- Public key X25519 decoder berada pada konfigurasi profil per akun; private key decoder tidak pernah masuk AITQR.
+- Public key X25519 decoder berada pada konfigurasi profil per akun; private key decoder hanya masuk melalui registrasi HTTPS ke Vault dan tidak pernah disimpan plaintext.
 
 ## 4. Aliran data
 
@@ -125,12 +125,24 @@ MQ1 tidak membawa signer `kid` atau signature; payload hanya dienkripsi ke publi
 | Elemen | Aturan |
 |---|---|
 | Public key decoder | Disimpan pada profil akun AITQR. Admin menempelkan public key X25519 dari ZYBTool. |
-| Private key decoder | Hanya berada di ZYBTool dan dilindungi Windows DPAPI. AITQR tidak pernah menerima private key. |
+| Private key decoder | Didaftarkan satu kali oleh admin melalui HTTPS, lalu disimpan sebagai ciphertext AES-256-GCM di Vault server. Plaintext tidak disimpan di browser, SQLite, log, bundel, atau build. |
 | Kunci petugas | Tidak ada. Akun petugas hanya username/kata sandi; tidak ada keypair Ed25519, pairing, atau allow-list. |
 | Kunci admin bundle | Private key Ed25519 tetap dipakai server untuk menandatangani bundle konfigurasi; public key tertanam di aplikasi. Ini bukan tanda tangan QR. |
 | Batas MQ1 | MQ1 memberi kerahasiaan dan integritas enkripsi, tetapi tidak mengautentikasi siapa pembuat QR dan tidak menyediakan replay protection. |
 
 Siapa pun yang mengetahui public key decoder dapat membuat QR MQ1 yang dapat didekripsi oleh private key pasangan. Jangan menampilkan `QR_DECRYPTED` sebagai bukti identitas petugas.
+
+
+## 5.1. Decoder Key Vault dan QR Inspector
+
+- `AITQR_VAULT_MASTER_KEY` wajib berupa 32 byte (64 karakter hex), disediakan sebagai secret environment server dan **tidak boleh** berada di SQLite, repository, image/container build, atau backup database.
+- Private key X25519 per akun didaftarkan sekali oleh admin melalui halaman Admin → QR Inspector. Backend menurunkan public key dari private key dan hanya menerima registrasi bila cocok dengan salah satu `recipient.public` pada draft/published config akun tersebut.
+- Database menyimpan `account_id`, fingerprint (`kid`), public key, IV acak, dan ciphertext AES-256-GCM. AAD/nonce tidak boleh dipakai ulang; setiap penyimpanan memakai IV acak 96-bit.
+- Rotasi key menambah entri fingerprint baru; key lama tetap tersedia agar QR lama masih dapat didekripsi. Penghapusan key adalah tindakan destruktif dan harus dikonfirmasi.
+- Endpoint decrypt hanya untuk sesi admin, memerlukan pemilihan akun eksplisit, menerima MQ1 saja, mencoba key terdaftar milik akun itu, dan tidak mengembalikan private key. QR MQ1 tidak memuat `kid` atau account ID sehingga akun tidak dapat diidentifikasi otomatis dari token.
+- Log hanya mencatat aktor, akun, fingerprint, waktu, dan hasil; jangan pernah mencatat token, private key, atau plaintext payload.
+- Backup SQLite **tidak cukup** untuk pemulihan. `AITQR_VAULT_MASTER_KEY` harus dicadangkan secara terpisah dalam password manager/secret manager. Kehilangan master key membuat semua key ciphertext tidak dapat dipulihkan.
+- Kompromi server bersama master key memungkinkan akses ke seluruh private key terdaftar. Batasi administrator, harden VPS, gunakan HTTPS, batasi akses shell, dan rotasi master key hanya dengan prosedur re-enkripsi terencana.
 
 ## 6. Deteksi kapabilitas dan kegagalan
 
@@ -181,7 +193,7 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 | Bundel konfigurasi palsu (alihkan penerima) | Tanda tangan admin, kunci tepercaya tertanam, `seq` anti-rollback | Kunci admin bocor |
 | XSS | CSP ketat, tanpa pihak ketiga, tanpa inline script, dependensi di-vendor | XSS tetap dapat menandatangani selama halaman terbuka |
 | Rantai pasok | Lockfile, versi pin, salinan Metaqr tanpa modifikasi dengan hash commit, audit dependensi di CI | Kompromi upstream |
-| Kunci perangkat dicuri | Tidak ada signing key petugas; hanya private key decoder di ZYBTool | Token sah antara pencurian dan revoke |
+| Database bocor | Ciphertext key dilindungi AES-256-GCM; master key terpisah dari SQLite | Jika server dan master key sama-sama dikompromikan, seluruh key dapat dibuka |
 | Situs tiruan (phishing) | Kunci tiruan tidak terdaftar → `UNKNOWN_DEVICE` di ZYB Tool | Operator tertipu menampilkan QR palsu |
 | QR difoto/disalin | Terenkripsi ke decoder; replay ditangani konsumen | Replay oleh pemegang HP sah |
 | Operator salah isi `device_id` | Pola `device_id`, layar konfirmasi; ZYB Tool memeriksa C1 | Salah isi yang cocok dengan kamera lain |
@@ -194,7 +206,7 @@ Profil alat lain mengikuti pola sama: konsumen memiliki skema; AITQR hanya menja
 
 - **Hosting:** VPS mandiri menjalankan Node.js HTTP API dan SQLite persisten. Caddy menyediakan HTTPS dan reverse proxy ke 127.0.0.1:3000.
 - **Database:** SQLite memakai WAL dan busy timeout; file data berada di luar direktori rilis. Skema dibuat otomatis oleh API saat pertama kali digunakan.
-- **Environment:** APP_ORIGIN, AITQR_SESSION_KEY, AITQR_ADMIN_KEY, AITQR_SETUP_CODE, AITQR_PBKDF2_ITERATIONS, AITQR_DATA_DIR, HOST, dan PORT. Secret dibaca dari environment/systemd EnvironmentFile dan tidak masuk repo.
+- **Environment:** APP_ORIGIN, AITQR_SESSION_KEY, AITQR_ADMIN_KEY, AITQR_SETUP_CODE, AITQR_PBKDF2_ITERATIONS, AITQR_VAULT_MASTER_KEY, AITQR_DATA_DIR, HOST, dan PORT. Secret dibaca dari environment/systemd EnvironmentFile dan tidak masuk repo.
 - **Service:** systemd menjalankan node scripts/serve.mjs, restart saat gagal, dan bind hanya ke loopback; Caddy meneruskan HTTPS.
 - **Build:** npm run build menghasilkan PWA di dist/ dan backend bundle server/app.js di luar direktori static assets.
 - **Signing bundle:** API menandatangani bundle akun ketika dipublikasikan dengan AITQR_ADMIN_KEY; public key pasangannya tertanam di src/config/trustedAdminKeys.ts. Tidak ada private key QR per petugas.

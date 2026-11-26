@@ -16,7 +16,7 @@ interface Health {
   admins: number;
   users: number;
   publishedSeq: number | null;
-  configured: { adminKey: boolean; sessionKey: boolean };
+  configured: { adminKey: boolean; sessionKey: boolean; vaultKey: boolean };
 }
 
 interface UserRow {
@@ -67,10 +67,18 @@ interface State {
   notice: string | null;
   noticeKind: "info" | "success" | "error";
   loginError: string | null;
-  activeTab: "qr" | "users" | "audit";
+  activeTab: "qr" | "users" | "audit" | "inspector";
 }
 
 const listTypeOverrides = new Map<string, "string" | "number">();
+
+interface VaultKeyRow { accountId: string; username: string; kid: string; createdAt: number; createdBy: string; }
+interface DecryptResult { ok: true; username: string; kid: string; payload: Record<string, unknown>; }
+let vaultKeys: VaultKeyRow[] = [];
+let inspectorAccountId: string | null = null;
+let inspectorResult: DecryptResult | null = null;
+let cameraStream: MediaStream | null = null;
+let cameraFrame = 0;
 
 const state: State = {
   session: null,
@@ -1169,6 +1177,160 @@ function renderPublish(): HTMLElement | null {
   ]);
 }
 
+async function loadVaultKeys(): Promise<void> {
+  try {
+    const result = await api<{ keys: VaultKeyRow[] }>("/api/admin/decoder-keys");
+    vaultKeys = result.keys;
+    if (state.activeTab === "inspector") render();
+  } catch (error) {
+    note(error instanceof Error ? error.message : String(error), "error");
+  }
+}
+
+function stopInspectorCamera(): void {
+  if (cameraFrame) cancelAnimationFrame(cameraFrame);
+  cameraFrame = 0;
+  cameraStream?.getTracks().forEach((track) => track.stop());
+  cameraStream = null;
+}
+
+async function decryptInspectorToken(token: string): Promise<void> {
+  if (!inspectorAccountId || !token.trim()) {
+    note("Pilih akun dan scan atau masukkan token MQ1 terlebih dahulu.", "error");
+    return;
+  }
+  stopInspectorCamera();
+  state.busy = "decrypt";
+  inspectorResult = null;
+  render();
+  try {
+    inspectorResult = await api<DecryptResult>("/api/admin/qr-decrypt", {
+      method: "POST",
+      body: JSON.stringify({ accountId: inspectorAccountId, token: token.trim() }),
+    });
+    state.busy = "";
+    note("QR berhasil didekripsi untuk akun " + inspectorResult.username + ".", "success");
+  } catch (error) {
+    state.busy = "";
+    note(error instanceof Error ? error.message : String(error), "error");
+  }
+}
+
+async function startInspectorCamera(video: HTMLVideoElement, tokenInput: HTMLTextAreaElement): Promise<void> {
+  type BarcodeHit = { rawValue: string };
+  type BarcodeDetectorLike = { detect(source: CanvasImageSource): Promise<BarcodeHit[]> };
+  type BarcodeDetectorConstructor = new (options?: { formats: string[] }) => BarcodeDetectorLike;
+  const Detector = (globalThis as typeof globalThis & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
+  if (!Detector) {
+    note("Scanner kamera otomatis belum didukung browser ini. Gunakan Chrome/Edge terbaru atau tempel token.", "error");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    note("Akses kamera memerlukan HTTPS dan izin kamera dari browser.", "error");
+    return;
+  }
+  stopInspectorCamera();
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    video.srcObject = cameraStream;
+    await video.play();
+    const detector = new Detector({ formats: ["qr_code"] });
+    const scan = async (): Promise<void> => {
+      if (!cameraStream) return;
+      try {
+        const hits = await detector.detect(video);
+        const raw = hits.find((hit) => hit.rawValue.startsWith("MQ1:"))?.rawValue;
+        if (raw) {
+          tokenInput.value = raw;
+          stopInspectorCamera();
+          await decryptInspectorToken(raw);
+          return;
+        }
+      } catch { /* A transient frame decode failure is harmless; continue scanning. */ }
+      cameraFrame = requestAnimationFrame(() => { void scan(); });
+    };
+    void scan();
+  } catch (error) {
+    stopInspectorCamera();
+    note(error instanceof Error ? error.message : "Tidak dapat membuka kamera. Periksa izin kamera.", "error");
+  }
+}
+
+function renderInspector(): HTMLElement {
+  const users = state.loaded?.users ?? [];
+  if (!inspectorAccountId || !users.some((item) => item.id === inspectorAccountId)) inspectorAccountId = users[0]?.id ?? null;
+  const accountSelect = el("select", {
+    class: "input",
+    props: { value: inspectorAccountId ?? "" },
+    on: { change: (event) => { inspectorAccountId = (event.target as HTMLSelectElement).value; inspectorResult = null; render(); } },
+  }, users.map((item) => el("option", {
+    attrs: { value: item.id, selected: item.id === inspectorAccountId },
+    text: (item.displayName ?? item.username) + " · " + item.username,
+  })));
+  const privateKey = el("input", {
+    class: "input mono",
+    attrs: { type: "password", autocomplete: "new-password", spellcheck: "false", placeholder: "64 karakter hex · X25519", required: true },
+  }) as HTMLInputElement;
+  const tokenInput = el("textarea", {
+    class: "input mono",
+    attrs: { rows: "3", placeholder: "MQ1: tempel token QR di sini", spellcheck: "false" },
+    props: { value: "" },
+  }) as HTMLTextAreaElement;
+  const video = el("video", {
+    class: "qr-camera-preview",
+    attrs: { autoplay: true, playsinline: true, muted: true },
+  }) as HTMLVideoElement;
+  const keys = vaultKeys.filter((key) => key.accountId === inspectorAccountId);
+  const keyCard = card("Registrasi private key", [
+    el("p", { class: "muted small", text: "Daftarkan private key X25519 satu kali untuk akun ini. Server akan mengenkripsinya dengan AES-256-GCM sebelum disimpan. Gunakan koneksi HTTPS dan jangan bagikan key ini." }),
+    el("label", { class: "field" }, [el("span", { class: "field-label", text: "Akun tujuan" }), accountSelect]),
+    el("label", { class: "field" }, [el("span", { class: "field-label", text: "Private key X25519 (hex)" }), privateKey]),
+    button("Daftarkan key ke Vault", () => {
+      if (!inspectorAccountId || !privateKey.value.trim()) { note("Pilih akun dan masukkan private key.", "error"); return; }
+      const secret = privateKey.value.trim();
+      privateKey.value = "";
+      state.busy = "vault";
+      render();
+      void api("/api/admin/decoder-keys", { method: "POST", body: JSON.stringify({ accountId: inspectorAccountId, privateKeyHex: secret }) })
+        .then(async () => { state.busy = ""; await loadVaultKeys(); note("Private key berhasil didaftarkan ke Vault.", "success"); })
+        .catch((error: unknown) => { state.busy = ""; note(error instanceof Error ? error.message : String(error), "error"); });
+    }, "primary"),
+    el("p", { class: "muted small", text: keys.length ? "Key terdaftar: " + keys.map((key) => key.kid).join(", ") : "Belum ada key untuk akun ini." }),
+    ...keys.map((key) => el("div", { class: "actions actions-row" }, [
+      el("span", { class: "mono small", text: key.kid + " · " + new Date(key.createdAt).toLocaleString("id-ID") }),
+      button("Hapus", () => {
+        if (!window.confirm("Hapus key " + key.kid + " dari Vault? QR lama yang memakai key ini tidak bisa didekripsi lagi.")) return;
+        state.busy = "vault-delete";
+        render();
+        void api("/api/admin/decoder-keys", { method: "DELETE", body: JSON.stringify({ accountId: key.accountId, kid: key.kid }) })
+          .then(async () => { state.busy = ""; await loadVaultKeys(); note("Key dihapus dari Vault.", "success"); })
+          .catch((error: unknown) => { state.busy = ""; note(error instanceof Error ? error.message : String(error), "error"); });
+      }, "danger"),
+    ])),
+  ]);
+  const scannerCard = card("Scan QR langsung", [
+    el("p", { class: "muted small", text: "Pilih akun terlebih dahulu. Arahkan kamera belakang ke QR; token MQ1 akan dideteksi otomatis dan didekripsi menggunakan key akun tersebut." }),
+    video,
+    el("div", { class: "actions actions-row" }, [
+      button("Buka kamera", () => void startInspectorCamera(video, tokenInput), "primary", state.busy !== ""),
+      button("Tutup kamera", () => { stopInspectorCamera(); video.srcObject = null; }, "secondary"),
+    ]),
+    el("label", { class: "field" }, [el("span", { class: "field-label", text: "Atau tempel token MQ1" }), tokenInput]),
+    el("div", { class: "actions" }, [button("Decrypt token", () => void decryptInspectorToken(tokenInput.value), "secondary")]),
+    inspectorResult ? el("div", { class: "stack" }, [
+      el("p", { class: "pill pill-ok", text: "Berhasil · " + inspectorResult.username + " · key " + inspectorResult.kid }),
+      el("pre", { class: "mono small qr-decrypt-result", text: JSON.stringify(inspectorResult.payload, null, 2) }),
+      button("Salin JSON", () => void navigator.clipboard?.writeText(JSON.stringify(inspectorResult?.payload ?? {}, null, 2)).then(() => note("JSON disalin.", "success")), "secondary"),
+    ]) : null,
+  ]);
+  return el("div", { class: "stack" }, [
+    state.health?.configured.vaultKey ? null : el("p", { class: "field-error", attrs: { role: "alert" }, text: "Vault belum aktif. Tambahkan AITQR_VAULT_MASTER_KEY (64 karakter hex) ke environment VPS, lalu restart layanan." }),
+    keyCard,
+    scannerCard,
+    el("p", { class: "muted small", text: "Catatan: MQ1 tidak membawa ID akun. Pemilihan akun diperlukan sebelum decrypt. Private key tidak pernah dikirim kembali ke browser." }),
+  ]);
+}
+
 function renderAudit(): HTMLElement | null {
   const audit = state.loaded?.audit ?? [];
   return card(
@@ -1304,11 +1466,11 @@ function render(): void {
         el("p", { class: "muted small", text: `Masuk sebagai ${state.session.user?.username ?? "-"} · ${state.session.user?.role ?? ""}` }),
       ]),
       el("nav", { class: "admin-tabs", attrs: { "aria-label": "Pengaturan AITQR" } }, [
-        ...([ ["qr", "QR & Profil"], ["users", "Akun Petugas"], ["audit", "Aktivitas"] ] as const).map(([id, label]) =>
-          el("button", { class: `admin-tab${state.activeTab === id ? " active" : ""}`, attrs: { type: "button", "aria-pressed": String(state.activeTab === id), disabled: state.busy !== "" }, text: label, on: { click: () => { state.activeTab = id; render(); } } }),
+        ...([ ["qr", "QR & Profil"], ["users", "Akun Petugas"], ["inspector", "QR Inspector"], ["audit", "Aktivitas"] ] as const).map(([id, label]) =>
+          el("button", { class: `admin-tab${state.activeTab === id ? " active" : ""}`, attrs: { type: "button", "aria-pressed": String(state.activeTab === id), disabled: state.busy !== "" }, text: label, on: { click: () => { stopInspectorCamera(); state.activeTab = id; if (id === "inspector") void loadVaultKeys(); render(); } } }),
         ),
       ]),
-      ...(state.activeTab === "qr" ? [renderFields(), renderKeys(), renderPublish()] : state.activeTab === "users" ? [renderUsers()] : [renderAudit()]),
+      ...(state.activeTab === "qr" ? [renderFields(), renderKeys(), renderPublish()] : state.activeTab === "users" ? [renderUsers()] : state.activeTab === "inspector" ? [renderInspector()] : [renderAudit()]),
       el("div", { class: "actions actions-stack" }, [button("Keluar", () => void logout(), "secondary")]),
     ]),
   );

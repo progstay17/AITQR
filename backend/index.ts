@@ -8,7 +8,8 @@
 import { signBundle as signWithKey } from "../src/config/sign.js";
 import { assertBundleShape } from "../src/config/verify.js";
 import { validateProfile } from "../src/profile.js";
-import { bytesToHex, kidOf } from "../vendor/metaqr/src/index.js";
+import { bytesToHex, kidOf, decode, fingerprint, webCryptoX25519 } from "../vendor/metaqr/src/index.js";
+import { openDecoderKey, sealDecoderKey } from "../src/decoder-vault.js";
 import {
   createSessionToken,
   hashPassword,
@@ -48,6 +49,8 @@ export interface Env {
   AITQR_SETUP_CODE?: string;
   /** Optional PBKDF2-SHA256 rounds; raise it where hosting allows more CPU. */
   AITQR_PBKDF2_ITERATIONS?: string;
+  /** 32-byte AES-256-GCM master key (64 hex chars), stored outside SQLite and backups. */
+  AITQR_VAULT_MASTER_KEY?: string;
 }
 
 interface UserRow {
@@ -105,6 +108,16 @@ const SCHEMA = [
      value TEXT NOT NULL,
      updated_at INTEGER NOT NULL,
      updated_by TEXT
+   )`,
+  `CREATE TABLE IF NOT EXISTS decoder_keys (
+     account_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     kid TEXT NOT NULL,
+     public_key TEXT NOT NULL,
+     iv TEXT NOT NULL,
+     ciphertext TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     created_by TEXT NOT NULL,
+     PRIMARY KEY (account_id, kid)
    )`,
   `CREATE TABLE IF NOT EXISTS audit (
      id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,6 +376,7 @@ export default {
           configured: {
             adminKey: /^[0-9a-fA-F]{64}$/.test(adminSeed),
             sessionKey: /^[0-9a-fA-F]{64}$/.test(env.AITQR_SESSION_KEY?.trim() ?? ""),
+            vaultKey: /^[0-9a-fA-F]{64}$/.test(env.AITQR_VAULT_MASTER_KEY?.trim() ?? ""),
           },
           adminKid,
           admins: Number(counts?.admins ?? 0),
@@ -504,6 +518,104 @@ export default {
       if (!path.startsWith("/api/admin/")) return fail("Not found", 404);
       if (user.role !== "admin") return fail("Peran administrator diperlukan.", 403);
 
+      // ---- decoder key vault + QR inspector --------------------------------------------
+      if (path === "/api/admin/decoder-keys") {
+        if (req.method === "GET") {
+          const rows = await env.DB.prepare(
+            "SELECT k.account_id, k.kid, k.created_at, k.created_by, u.username " +
+              "FROM decoder_keys k INNER JOIN users u ON u.id = k.account_id ORDER BY u.created_at, k.created_at",
+          ).all<{ account_id: string; kid: string; created_at: number; created_by: string; username: string }>();
+          return json({ keys: rows.results.map((row) => ({
+            accountId: row.account_id, username: row.username, kid: row.kid,
+            createdAt: row.created_at, createdBy: row.created_by,
+          })) });
+        }
+        if (req.method === "POST") {
+          const masterKey = env.AITQR_VAULT_MASTER_KEY?.trim() ?? "";
+          if (!/^[0-9a-fA-F]{64}$/.test(masterKey)) return fail("Key Vault belum dikonfigurasi. Atur AITQR_VAULT_MASTER_KEY di environment server.", 503);
+          const appUrl = new URL(env.APP_ORIGIN);
+          if (appUrl.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(appUrl.hostname)) {
+            return fail("Registrasi private key wajib menggunakan HTTPS.", 503);
+          }
+          const body = (await req.json().catch(() => null)) as { accountId?: string; privateKeyHex?: string } | null;
+          const accountId = String(body?.accountId ?? "");
+          const privateKeyHex = String(body?.privateKeyHex ?? "").replace(/\s+/g, "");
+          if (!accountId || !/^[0-9a-fA-F]{64}$/.test(privateKeyHex)) return fail("Pilih akun dan masukkan private key X25519 64 karakter hex.");
+          const target = await env.DB.prepare("SELECT id, username FROM users WHERE id = ?").bind(accountId)
+            .first<{ id: string; username: string }>();
+          if (!target) return fail("Akun tidak ditemukan.", 404);
+          const config = await env.DB.prepare("SELECT draft_source, published_source FROM account_configs WHERE user_id = ?")
+            .bind(accountId).first<{ draft_source: string; published_source: string }>();
+          if (!config) return fail("Konfigurasi akun tidak ditemukan.", 404);
+          let publicKey: Uint8Array;
+          const privateBytes = Uint8Array.from(privateKeyHex.match(/.{2}/g)!, (part) => Number.parseInt(part, 16));
+          try { publicKey = await webCryptoX25519.publicFromPrivate(privateBytes); }
+          catch { return fail("Private key tidak valid atau runtime tidak mendukung X25519.", 422); }
+          finally { privateBytes.fill(0); }
+          const publicHex = bytesToHex(publicKey);
+          const accepted = new Set<string>();
+          for (const source of [config.published_source, config.draft_source]) {
+            try {
+              const bundle = JSON.parse(source) as Bundle;
+              for (const profile of bundle.profiles ?? []) {
+                const candidate = profile.recipient?.public?.replace(/\s+/g, "").toLowerCase();
+                if (candidate && /^[0-9a-f]{64}$/.test(candidate)) accepted.add(candidate);
+              }
+            } catch { /* malformed drafts are not trusted */ }
+          }
+          if (!accepted.has(publicHex)) return fail("Private key tidak cocok dengan public key decoder pada profil akun ini. Periksa akun dan key yang dipilih.", 422);
+          const kid = await fingerprint(publicKey);
+          let sealed: { iv: string; ciphertext: string };
+          try { sealed = await sealDecoderKey(privateKeyHex, masterKey, accountId, kid); }
+          catch { return fail("Gagal menyimpan key ke Vault. Periksa konfigurasi master key.", 503); }
+          await env.DB.prepare(
+            "INSERT INTO decoder_keys (account_id, kid, public_key, iv, ciphertext, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) " +
+              "ON CONFLICT(account_id, kid) DO UPDATE SET public_key = excluded.public_key, iv = excluded.iv, ciphertext = excluded.ciphertext, created_at = excluded.created_at, created_by = excluded.created_by",
+          ).bind(accountId, kid, publicHex, sealed.iv, sealed.ciphertext, Date.now(), user.username).run();
+          await log(env, user.username, "decoder-key.register", target.username + " kid=" + kid);
+          return json({ ok: true, accountId, username: target.username, kid });
+        }
+        if (req.method === "DELETE") {
+          const body = (await req.json().catch(() => null)) as { accountId?: string; kid?: string } | null;
+          const accountId = String(body?.accountId ?? "");
+          const kid = String(body?.kid ?? "");
+          if (!accountId || !/^[0-9a-f]{16}$/.test(kid)) return fail("accountId dan kid tidak valid.");
+          const result = await env.DB.prepare("DELETE FROM decoder_keys WHERE account_id = ? AND kid = ?").bind(accountId, kid).run();
+          if (result.meta.changes !== 1) return fail("Key tidak ditemukan.", 404);
+          const target = await env.DB.prepare("SELECT username FROM users WHERE id = ?").bind(accountId).first<{ username: string }>();
+          await log(env, user.username, "decoder-key.delete", (target?.username ?? accountId) + " kid=" + kid);
+          return json({ ok: true });
+        }
+        return fail("Method not allowed", 405);
+      }
+
+      if (path === "/api/admin/qr-decrypt") {
+        if (req.method !== "POST") return fail("Method not allowed", 405);
+        const masterKey = env.AITQR_VAULT_MASTER_KEY?.trim() ?? "";
+        if (!/^[0-9a-fA-F]{64}$/.test(masterKey)) return fail("Key Vault belum dikonfigurasi di server.", 503);
+        const body = (await req.json().catch(() => null)) as { accountId?: string; token?: string } | null;
+        const accountId = String(body?.accountId ?? "");
+        const token = String(body?.token ?? "").trim();
+        if (!accountId || !token || token.length > 4400 || !token.startsWith("MQ1:")) return fail("Pilih akun dan masukkan QR token MQ1 yang valid.");
+        const target = await env.DB.prepare("SELECT username FROM users WHERE id = ?").bind(accountId).first<{ username: string }>();
+        if (!target) return fail("Akun tidak ditemukan.", 404);
+        const rows = await env.DB.prepare("SELECT kid, iv, ciphertext FROM decoder_keys WHERE account_id = ? ORDER BY created_at DESC")
+          .bind(accountId).all<{ kid: string; iv: string; ciphertext: string }>();
+        if (!rows.results.length) return fail("Belum ada private key terdaftar untuk akun ini.", 409);
+        for (const row of rows.results) {
+          let privateKey: Uint8Array | null = null;
+          try {
+            privateKey = await openDecoderKey(row.iv, row.ciphertext, masterKey, accountId, row.kid);
+            const payload = await decode(token, privateKey);
+            await log(env, user.username, "qr.decrypt", target.username + " kid=" + row.kid);
+            return json({ ok: true, accountId, username: target.username, kid: row.kid, payload });
+          } catch { /* Try another registered key for this account; do not reveal key-specific failures. */ }
+          finally { privateKey?.fill(0); }
+        }
+        await log(env, user.username, "qr.decrypt.failed", target.username + " keys=" + rows.results.length);
+        return fail("QR tidak dapat didekripsi dengan key akun ini. Pastikan QR berasal dari akun yang dipilih dan key-nya sudah terdaftar.", 422);
+      }
+
       if (path === "/api/admin/state") {
         const draft = await env.DB.prepare("SELECT source, updated_at, updated_by FROM bundle_draft WHERE id = 1").first<{
           source: string;
@@ -629,6 +741,7 @@ export default {
           if (target.role === "admin" && (await adminCount(env)) <= 1) {
             return fail("Minimal satu administrator harus tersisa.", 409);
           }
+          await env.DB.prepare("DELETE FROM decoder_keys WHERE account_id = ?").bind(target.id).run();
           await env.DB.prepare("DELETE FROM account_configs WHERE user_id = ?").bind(target.id).run();
           await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(target.id).run();
           await log(env, user.username, "user.delete", target.username);
